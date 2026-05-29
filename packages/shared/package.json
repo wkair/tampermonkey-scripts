@@ -1,0 +1,7 @@
+{
+  "name": "@tm/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared helpers for Tampermonkey userscripts",
+  "main": "index.ts"
+}

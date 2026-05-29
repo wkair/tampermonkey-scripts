@@ -1,0 +1,17 @@
+{
+  "name": "@tm/comic-viewer",
+  "version": "1.3.2",
+  "private": true,
+  "description": "Premium Double-Page Comic Viewer Tampermonkey Script",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vite": "^5.1.4",
+    "vite-plugin-monkey": "^4.0.6"
+  }
+}

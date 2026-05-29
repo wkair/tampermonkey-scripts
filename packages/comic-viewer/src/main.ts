@@ -1,40 +1,26 @@
-// ==UserScript==
-// @name         Premium Double-Page Comic Viewer
-// @namespace    http://tampermonkey.net/
-// @version      1.3.2
-// @description  세로 스크롤 만화를 가로 2페이지 양면 뷰어(RTL 지원, 표지 단독 보기, 가로 이미지 감지, 자동 다음화 이동)로 최적화합니다.
-// @author       Antigravity
-// @match        *://update.spotv24.com/*
-// @match        *://*.spotv24.com/*
-// @match        *://*.spotv30.com/*
-// @match        *://*.spotv33.com/*
-// @match        *://*.spotv34.com/*
-// @grant        GM_setValue
-// @grant        GM_getValue
-// @grant        GM_registerMenuCommand
-// @run-at       document-end
-// ==/UserScript==
+import './style.css';
 
-(function () {
-  "use strict";
+// TypeScript declarations for Tampermonkey Globals
+declare const unsafeWindow: any;
+declare function GM_getValue(key: string, defaultValue: any): any;
+declare function GM_setValue(key: string, value: any): void;
+declare function GM_registerMenuCommand(name: string, fn: () => any, accessKey?: string): void;
 
-  // --- 0. URL Guard ---
-  const urlParams = new URLSearchParams(window.location.search);
-  if (!urlParams.has("wr_id")) {
-    console.log(
-      "[2-Page Comic Viewer] 에피소드 목록/작품 정보 페이지이므로 스크립트 활성화를 건너뜁니다.",
-    );
-    return;
-  }
-
+// --- 0. URL Guard ---
+const urlParams = new URLSearchParams(window.location.search);
+if (!urlParams.has("wr_id")) {
+  console.log(
+    "[2-Page Comic Viewer] 에피소드 목록/작품 정보 페이지이므로 스크립트 활성화를 건너뜁니다.",
+  );
+} else {
   const hasViewerFlag = urlParams.get("cv_view") === "true";
 
   console.log(
-    "[2-Page Comic Viewer] 스크립트 v1.3.2 로드됨. 에피소드 페이지 확인 완료.",
+    "[2-Page Comic Viewer] 스크립트 로드됨. 에피소드 페이지 확인 완료.",
   );
 
   // --- 1. Persistent Storage Helpers ---
-  function getStorage(key, defaultValue) {
+  function getStorage(key: string, defaultValue: any): any {
     if (typeof GM_getValue !== "undefined") {
       return GM_getValue(key, defaultValue);
     }
@@ -42,7 +28,7 @@
     return val !== null ? JSON.parse(val) : defaultValue;
   }
 
-  function setStorage(key, value) {
+  function setStorage(key: string, value: any): void {
     if (typeof GM_setValue !== "undefined") {
       GM_setValue(key, value);
       return;
@@ -51,7 +37,7 @@
   }
 
   // URL Resolver using native browser engine
-  function resolveUrl(src) {
+  function resolveUrl(src: string): string {
     if (!src) return "";
     try {
       return new URL(src, window.location.href).href;
@@ -68,7 +54,7 @@
   }
 
   // Safely append cv_view=true query parameter to a URL
-  function appendViewerParam(url) {
+  function appendViewerParam(url: string): string {
     if (!url) return url;
     try {
       const parsed = new URL(url, window.location.href);
@@ -80,29 +66,39 @@
     }
   }
 
+  interface ComicImage {
+    src: string;
+    aspect: number;
+    loaded: boolean;
+    element?: HTMLImageElement;
+    width?: number;
+    height?: number;
+  }
+
   // --- 2. State Management ---
   const state = {
     isActive: false, // Set to false initially, will set true on successful load
-    images: [], // Array of { src, aspect, element }
-    spreads: [], // Array of spreads, e.g. [[0], [1, 2], [3, 4]]
+    images: [] as ComicImage[], // Array of { src, aspect, element }
+    spreads: [] as number[][], // Array of spreads, e.g. [[0], [1, 2], [3, 4]]
     currentSpreadIndex: 0, // Index in state.spreads
     isRTL: getStorage("isRTL", true), // Japanese reading direction (Right to Left)
     coverMode: getStorage("coverMode", true), // Keep the first page single
-    nextTarget: null, // Next episode URL string or DOM element
-    prevTarget: null, // Prev episode URL string or DOM element
+    nextTarget: null as string | HTMLElement | null, // Next episode URL string or DOM element
+    prevTarget: null as string | HTMLElement | null, // Prev episode URL string or DOM element
     keyEventsBound: false, // Prevent redundant key listener registration
     nextChapterConfirm: false, // Confirm going to the next chapter on double input
     prevChapterConfirm: false, // Confirm going to the prev chapter on double input
     transitionMode: getStorage("transitionMode", "instant"), // Transition style: 'instant' or 'fade'
+    currentRenderId: 0,
   };
 
   // --- 3. Robust Heuristics & Global Variables Engine ---
 
   // Find all valid cartoon/manga images
-  function scrapeImages() {
+  function scrapeImages(): ComicImage[] {
     const pageWindow =
       typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
-    let urls = [];
+    let urls: string[] = [];
 
     // PRIMARY: Extract directly from the page's global Javascript variables (spotv24/11toon standard)
     if (
@@ -136,7 +132,7 @@
 
     // FALLBACK: DOM-based scraping (original heuristics)
     const imgElements = Array.from(document.querySelectorAll("img"));
-    const candidates = [];
+    const candidates: { element: HTMLImageElement; src: string }[] = [];
 
     console.log(
       `[2-Page Comic Viewer] 글로벌 변수가 없어 DOM 스크랩 실행. 총 이미지 개수: ${imgElements.length}`,
@@ -153,7 +149,7 @@
       ".view-img",
     ];
 
-    let gnuboardContainer = null;
+    let gnuboardContainer: Element | null = null;
     for (const selector of gnuboardSelectors) {
       const el = document.querySelector(selector);
       if (el && el.querySelectorAll("img").length >= 2) {
@@ -237,16 +233,16 @@
       candidates.push({ element: img, src: src });
     });
 
-    let filteredCandidates = [];
+    let filteredCandidates: { element: HTMLImageElement; src: string }[] = [];
 
     if (gnuboardContainer) {
       filteredCandidates = candidates.filter((cand) =>
-        gnuboardContainer.contains(cand.element),
+        gnuboardContainer!.contains(cand.element),
       );
     }
 
     if (filteredCandidates.length < 3) {
-      const groups = new Map();
+      const groups = new Map<Element, number>();
       candidates.forEach((cand) => {
         let container = cand.element.parentElement;
         if (container && container.tagName.toLowerCase() === "a") {
@@ -258,7 +254,7 @@
       });
 
       let maxCount = 0;
-      let bestContainer = null;
+      let bestContainer: Element | null = null;
       for (const [container, count] of groups.entries()) {
         if (count > maxCount) {
           maxCount = count;
@@ -268,7 +264,7 @@
 
       if (bestContainer && maxCount >= 3) {
         filteredCandidates = candidates.filter((cand) =>
-          bestContainer.contains(cand.element),
+          bestContainer!.contains(cand.element),
         );
       }
     }
@@ -284,8 +280,8 @@
       });
     }
 
-    const uniqueUrls = new Set();
-    const finalImages = [];
+    const uniqueUrls = new Set<string>();
+    const finalImages: ComicImage[] = [];
     filteredCandidates.forEach((cand) => {
       if (!uniqueUrls.has(cand.src)) {
         uniqueUrls.add(cand.src);
@@ -301,18 +297,18 @@
   }
 
   // Heuristically find next/prev episode links
-  function scrapeNavigationLinks() {
+  function scrapeNavigationLinks(): void {
     const anchors = Array.from(
       document.querySelectorAll('a, button, [role="button"]'),
-    );
+    ) as HTMLElement[];
 
     const nextRegex =
       /(다음\s*화|다음\s*편|다음\s*에피소드|다음\s*글|다음\s*화\s*보기|next\s*ep|next\s*chapter|next\s*vol|▶|→)/i;
     const prevRegex =
       /(이전\s*화|이전\s*편|이전\s*에피소드|이전\s*글|이전\s*화\s*보기|prev\s*ep|prev\s*chapter|prev\s*vol|◀|←)/i;
 
-    let nextCandidate = null;
-    let prevCandidate = null;
+    let nextCandidate: string | HTMLElement | null = null;
+    let prevCandidate: string | HTMLElement | null = null;
 
     for (const anchor of anchors) {
       const text = (anchor.textContent || anchor.innerText || "").trim();
@@ -351,7 +347,7 @@
     if (!nextCandidate) {
       const nxtEl = document.querySelector(
         ".btn_nxt, .bo_v_nb .btn_next, a.btn_next, .right-episode.next, button.next",
-      );
+      ) as HTMLElement;
       if (nxtEl) {
         const onclickText = nxtEl.getAttribute("onclick") || "";
         const match = onclickText.match(
@@ -367,7 +363,7 @@
     if (!prevCandidate) {
       const prvEl = document.querySelector(
         ".btn_prv, .bo_v_nb .btn_prev, a.btn_prev, .left-episode.prev, button.prev",
-      );
+      ) as HTMLElement;
       if (prvEl) {
         const onclickText = prvEl.getAttribute("onclick") || "";
         const match = onclickText.match(
@@ -384,7 +380,7 @@
     state.nextTarget = nextCandidate;
     state.prevTarget = prevCandidate;
 
-    const getTargetLogStr = (target) => {
+    const getTargetLogStr = (target: string | HTMLElement | null): string => {
       if (!target) return "없음";
       if (typeof target === "string") return target;
       return `DOM Element (${target.tagName.toLowerCase()}${target.className ? "." + target.className.replace(/\s+/g, ".") : ""})`;
@@ -396,7 +392,7 @@
   }
 
   // Unified robust navigation execution helper
-  function performNavigation(target) {
+  function performNavigation(target: string | HTMLElement | null): void {
     if (!target) return;
     if (typeof target === "string") {
       window.location.href = state.isActive ? appendViewerParam(target) : target;
@@ -414,392 +410,22 @@
   }
 
   // --- 4. Premium Overlay UI & Styles ---
-  let overlayEl = null;
-  let viewAreaEl = null;
-  let ctrlPanelEl = null;
-  let progressBarEl = null;
-  let progressIndicatorEl = null;
-  let pageNumEl = null;
-  let manualLaunchBtn = null; // Tiny floating manual toggle badge
+  let overlayEl: HTMLDivElement | null = null;
+  let viewAreaEl: HTMLDivElement | null = null;
+  let ctrlPanelEl: HTMLDivElement | null = null;
+  let progressBarEl: HTMLDivElement | null = null;
+  let progressIndicatorEl: HTMLDivElement | null = null;
+  let pageNumEl: HTMLDivElement | null = null;
+  let manualLaunchBtn: HTMLDivElement | null = null; // Tiny floating manual toggle badge
 
-  function injectStyles() {
-    if (document.getElementById("premium-comic-viewer-styles")) return;
-
-    const style = document.createElement("style");
-    style.id = "premium-comic-viewer-styles";
-    style.textContent = `
-            :root {
-                --cv-bg: #09090b;
-                --cv-panel-bg: rgba(15, 15, 20, 0.88);
-                --cv-panel-border: rgba(255, 255, 255, 0.08);
-                --cv-accent: linear-gradient(90deg, #a78bfa, #c084fc);
-                --cv-accent-solid: #c084fc;
-                --cv-accent-glow: rgba(168, 85, 247, 0.2);
-                --cv-text: #f4f4f5;
-                --cv-text-muted: #94a3b8;
-                --cv-panel-blur: blur(24px) saturate(190%);
-                --cv-radius: 16px;
-                --cv-shadow: 0 16px 48px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-            }
-
-            .cv-overlay {
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100vw;
-                height: 100vh;
-                background-color: var(--cv-bg);
-                z-index: 999999;
-                display: none;
-                flex-direction: column;
-                justify-content: center;
-                align-items: center;
-                overflow: hidden;
-                font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-                color: var(--cv-text);
-                opacity: 0;
-                transition: opacity 0.3s ease;
-            }
-
-            .cv-overlay.active {
-                display: flex;
-                opacity: 1;
-            }
-
-            .cv-view-area {
-                display: flex;
-                width: 100%;
-                height: 100vh;
-                justify-content: center;
-                align-items: center;
-                position: relative;
-                user-select: none;
-            }
-
-            .cv-click-zone {
-                position: absolute;
-                top: 0;
-                height: 100%;
-                width: 25%;
-                cursor: pointer;
-                z-index: 10;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                opacity: 0;
-                transition: opacity 0.3s ease;
-                background: linear-gradient(to right, rgba(255,255,255,0.01), transparent);
-            }
-            
-            .cv-click-zone.right-zone {
-                right: 0;
-                background: linear-gradient(to left, rgba(255,255,255,0.01), transparent);
-            }
-
-            .cv-click-zone:hover {
-                opacity: 0.15;
-                background: linear-gradient(to right, rgba(255,255,255,0.05), transparent);
-            }
-            .cv-click-zone.right-zone:hover {
-                background: linear-gradient(to left, rgba(255,255,255,0.05), transparent);
-            }
-
-            .cv-spread-container {
-                position: absolute;
-                top: 0;
-                left: 0;
-                display: flex;
-                height: 100%;
-                width: 100%;
-                justify-content: center;
-                align-items: center;
-                gap: 0;
-                transition: transform 0.25s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.2s ease;
-            }
-
-            .cv-spread-container.rtl {
-                flex-direction: row-reverse;
-            }
-
-            .cv-page-wrapper {
-                flex: 1;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100%;
-                max-width: 50%;
-                position: relative;
-            }
-
-            /* Seamless center seam logic for 2-page spreads */
-            .cv-spread-container:not(.rtl) .cv-page-wrapper:first-child {
-                justify-content: flex-end;
-            }
-            .cv-spread-container:not(.rtl) .cv-page-wrapper:last-child {
-                justify-content: flex-start;
-            }
-            .cv-spread-container.rtl .cv-page-wrapper:first-child {
-                justify-content: flex-start;
-            }
-            .cv-spread-container.rtl .cv-page-wrapper:last-child {
-                justify-content: flex-end;
-            }
-
-            .cv-page-wrapper.single-page {
-                max-width: 100%;
-                justify-content: center !important;
-            }
-
-            .cv-comic-image {
-                max-width: 100%;
-                max-height: 100%;
-                object-fit: contain;
-                border-radius: 0;
-                box-shadow: none;
-                opacity: 0;
-                transition: opacity 0.2s ease;
-            }
-
-            .cv-comic-image.loaded {
-                opacity: 1;
-            }
-
-            .cv-spread-container.instant .cv-comic-image {
-                transition: none !important;
-            }
-
-            .cv-spinner {
-                position: absolute;
-                width: 40px;
-                height: 40px;
-                border: 3px solid rgba(255, 255, 255, 0.1);
-                border-radius: 50%;
-                border-top-color: var(--cv-accent-solid);
-                animation: cv-spin 0.8s linear infinite;
-            }
-
-            @keyframes cv-spin {
-                to { transform: rotate(360deg); }
-            }
-
-            .cv-ctrl-panel {
-                position: absolute;
-                bottom: 24px;
-                left: 50%;
-                transform: translateX(-50%) translateY(0);
-                width: auto;
-                min-width: 480px;
-                height: 56px;
-                background: var(--cv-panel-bg);
-                backdrop-filter: var(--cv-panel-blur);
-                -webkit-backdrop-filter: var(--cv-panel-blur);
-                border: 1px solid var(--cv-panel-border);
-                border-radius: 28px;
-                box-shadow: var(--cv-shadow);
-                display: flex;
-                align-items: center;
-                padding: 0 24px;
-                gap: 18px;
-                z-index: 100;
-                transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
-            }
-
-            .cv-ctrl-panel.idle {
-                opacity: 0.1;
-                transform: translateX(-50%) translateY(12px);
-            }
-
-            .cv-ctrl-panel.idle:hover {
-                opacity: 1;
-                transform: translateX(-50%) translateY(0);
-            }
-
-            .cv-btn {
-                background: transparent;
-                border: 1px solid transparent;
-                color: var(--cv-text-muted);
-                font-size: 13px;
-                font-weight: 600;
-                padding: 6px 14px;
-                border-radius: 20px;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                gap: 6px;
-                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-                user-select: none;
-            }
-
-            .cv-btn:hover {
-                background: rgba(255, 255, 255, 0.08) !important;
-                border-color: rgba(255, 255, 255, 0.12) !important;
-                color: #ffffff !important;
-                transform: translateY(-1px);
-            }
-
-            .cv-btn:active {
-                transform: translateY(1px);
-            }
-
-            .cv-btn.active {
-                background: rgba(168, 85, 247, 0.08);
-                color: #e9d5ff;
-                border-color: rgba(168, 85, 247, 0.25);
-            }
-
-            .cv-divider {
-                width: 1px;
-                height: 20px;
-                background: rgba(255, 255, 255, 0.12);
-            }
-
-            .cv-page-info {
-                font-size: 14px;
-                font-weight: 500;
-                color: var(--cv-text-muted);
-                min-width: 90px;
-                text-align: center;
-            }
-
-            .cv-slider-container {
-                flex: 1;
-                height: 6px;
-                background: rgba(255, 255, 255, 0.1);
-                border-radius: 3px;
-                position: relative;
-                cursor: pointer;
-                transition: height 0.15s ease;
-            }
-
-            .cv-slider-container:hover {
-                height: 8px;
-            }
-
-            .cv-slider-bar {
-                height: 100%;
-                width: 0%;
-                background: var(--cv-accent);
-                border-radius: 3px;
-                box-shadow: 0 0 10px var(--cv-accent-glow);
-                position: absolute;
-                left: 0;
-                top: 0;
-                transition: width 0.1s linear;
-            }
-
-            .cv-slider-tooltip {
-                position: absolute;
-                bottom: 20px;
-                transform: translateX(-50%);
-                background: #1e293b;
-                border: 1px solid rgba(255,255,255,0.1);
-                padding: 4px 8px;
-                border-radius: 4px;
-                font-size: 11px;
-                color: #ffffff;
-                pointer-events: none;
-                display: none;
-                white-space: nowrap;
-                box-shadow: var(--cv-shadow);
-            }
-
-            .cv-alert {
-                position: fixed;
-                top: 30px;
-                left: 50%;
-                transform: translateX(-50%) translateY(-20px);
-                background: rgba(30, 41, 59, 0.9);
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                backdrop-filter: blur(8px);
-                color: #ffffff;
-                padding: 10px 24px;
-                border-radius: 30px;
-                font-size: 14px;
-                font-weight: 500;
-                box-shadow: var(--cv-shadow);
-                opacity: 0;
-                z-index: 1000000;
-                transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
-                pointer-events: none;
-            }
-
-            .cv-alert.show {
-                opacity: 1;
-                transform: translateX(-50%) translateY(0);
-            }
-
-            .cv-toggle-btn {
-                background: rgba(255, 255, 255, 0.04);
-                border: 1px solid rgba(255, 255, 255, 0.05);
-            }
-
-            .cv-restore-btn {
-                position: fixed;
-                top: 20px;
-                right: 20px;
-                z-index: 1000000;
-                background: rgba(18, 18, 18, 0.6);
-                backdrop-filter: blur(10px);
-                border: 1px solid var(--cv-panel-border);
-                color: var(--cv-text);
-                width: 40px;
-                height: 40px;
-                border-radius: 50%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 20px;
-                cursor: pointer;
-                transition: all 0.2s ease;
-                box-shadow: var(--cv-shadow);
-            }
-
-            .cv-restore-btn:hover {
-                background: rgba(239, 68, 68, 0.8);
-                color: white;
-                transform: scale(1.1);
-            }
-
-            body.cv-active-mode {
-                overflow: hidden !important;
-            }
-
-            .cv-manual-launcher {
-                position: fixed;
-                bottom: 20px;
-                right: 20px;
-                z-index: 999998;
-                background: rgba(15, 15, 20, 0.9) !important;
-                backdrop-filter: var(--cv-panel-blur);
-                -webkit-backdrop-filter: var(--cv-panel-blur);
-                border: 1px solid var(--cv-panel-border) !important;
-                color: #f4f4f5 !important;
-                padding: 10px 18px;
-                border-radius: 20px;
-                font-size: 13px;
-                font-weight: 600;
-                cursor: pointer;
-                box-shadow: var(--cv-shadow);
-                display: flex;
-                align-items: center;
-                gap: 6px;
-                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-                user-select: none;
-            }
-
-            .cv-manual-launcher:hover {
-                background: rgba(28, 25, 38, 0.95) !important;
-                border-color: rgba(168, 85, 247, 0.4) !important;
-                color: #e9d5ff !important;
-                transform: translateY(-2px) scale(1.02);
-                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
-            }
-        `;
-    document.head.appendChild(style);
+  // Injected CSS style is handled automatically by Vite-plugin-monkey bundling './style.css'
+  // So injectStyles() is now a no-op helper
+  function injectStyles(): void {
+    // No-op (handled by bundle)
   }
 
   // Creates manual activation button in the corner
-  function createManualLaunchButton() {
+  function createManualLaunchButton(): void {
     if (manualLaunchBtn) return;
 
     manualLaunchBtn = document.createElement("div");
@@ -827,7 +453,7 @@
     document.body.appendChild(manualLaunchBtn);
   }
 
-  function createOverlay() {
+  function createOverlay(): void {
     if (overlayEl) return;
 
     overlayEl = document.createElement("div");
@@ -959,7 +585,7 @@
     progressBarEl.appendChild(tooltip);
 
     progressBarEl.addEventListener("mousemove", (e) => {
-      const rect = progressBarEl.getBoundingClientRect();
+      const rect = progressBarEl!.getBoundingClientRect();
       const pct = Math.max(
         0,
         Math.min(1, (e.clientX - rect.left) / rect.width),
@@ -984,7 +610,7 @@
     });
 
     progressBarEl.addEventListener("click", (e) => {
-      const rect = progressBarEl.getBoundingClientRect();
+      const rect = progressBarEl!.getBoundingClientRect();
       const pct = Math.max(
         0,
         Math.min(1, (e.clientX - rect.left) / rect.width),
@@ -1015,14 +641,14 @@
     setupIdleFader();
   }
 
-  function createDivider() {
+  function createDivider(): HTMLDivElement {
     const div = document.createElement("div");
     div.className = "cv-divider";
     return div;
   }
 
-  let idleTimeout = null;
-  function setupIdleFader() {
+  let idleTimeout: any = null;
+  function setupIdleFader(): void {
     const resetIdle = () => {
       if (ctrlPanelEl) {
         ctrlPanelEl.classList.remove("idle");
@@ -1041,8 +667,8 @@
     resetIdle();
   }
 
-  let alertTimeout = null;
-  function showAlert(message) {
+  let alertTimeout: any = null;
+  function showAlert(message: string): void {
     let alertEl = document.getElementById("cv-alert-banner");
     if (!alertEl) {
       alertEl = document.createElement("div");
@@ -1055,14 +681,15 @@
 
     clearTimeout(alertTimeout);
     alertTimeout = setTimeout(() => {
-      alertEl.classList.remove("show");
+      alertEl!.classList.remove("show");
     }, 2000);
   }
 
   // --- 5. Rendering Engine ---
 
-  function buildSpreads() {
-    const spreads = [];
+  // Standardize spread building
+  function buildSpreads(): void {
+    const spreads: number[][] = [];
     let i = 0;
 
     if (state.coverMode && state.images.length > 0) {
@@ -1101,7 +728,7 @@
     state.spreads = spreads;
   }
 
-  function matchSpreadWithIndex(imageIndex) {
+  function matchSpreadWithIndex(imageIndex: number): void {
     for (let i = 0; i < state.spreads.length; i++) {
       if (state.spreads[i].includes(imageIndex)) {
         state.currentSpreadIndex = i;
@@ -1110,7 +737,7 @@
     }
   }
 
-  function discoverImageAspectRatios() {
+  function discoverImageAspectRatios(): void {
     state.images.forEach((imgObj, idx) => {
       if (imgObj.loaded) return;
       const tempImg = new Image();
@@ -1128,17 +755,17 @@
         matchSpreadWithIndex(activeIndexBefore);
 
         if (state.isActive) {
-          debouncedRenderView(); // Optimized: Debounce multiple aspect ratio updates!
+          debouncedRenderView(); // Debounce multiple aspect ratio updates!
         }
       };
     });
   }
 
-  function preloadAdjacentSpreads() {
+  function preloadAdjacentSpreads(): void {
     const nextIdx = state.currentSpreadIndex + 1;
     const prevIdx = state.currentSpreadIndex - 1;
 
-    const indicesToLoad = [];
+    const indicesToLoad: number[] = [];
     if (nextIdx < state.spreads.length)
       indicesToLoad.push(...state.spreads[nextIdx]);
     if (prevIdx >= 0) indicesToLoad.push(...state.spreads[prevIdx]);
@@ -1157,13 +784,13 @@
   }
 
   // Debounced render to prevent DOM accumulation from rapid aspect ratio loading calls
-  let renderDebounceTimeout = null;
-  function debouncedRenderView() {
+  let renderDebounceTimeout: any = null;
+  function debouncedRenderView(): void {
     clearTimeout(renderDebounceTimeout);
     renderDebounceTimeout = setTimeout(renderView, 50);
   }
 
-  function renderView() {
+  function renderView(): void {
     if (!viewAreaEl || state.spreads.length === 0) return;
 
     const spread = state.spreads[state.currentSpreadIndex];
@@ -1176,7 +803,7 @@
     // Find all active/old spread containers in the DOM
     const oldSpreads = Array.from(
       viewAreaEl.querySelectorAll(".cv-spread-container"),
-    );
+    ) as HTMLElement[];
 
     const spreadContainer = document.createElement("div");
     spreadContainer.className = `cv-spread-container ${state.isRTL ? "rtl" : ""} ${state.transitionMode === "instant" ? "instant" : ""}`;
@@ -1271,7 +898,7 @@
 
       pageWrapper.addEventListener("dblclick", () => {
         if (!document.fullscreenElement) {
-          overlayEl.requestFullscreen().catch((err) => {
+          overlayEl!.requestFullscreen().catch((err) => {
             console.error(`Error entering full-screen: ${err.message}`);
           });
         } else {
@@ -1314,7 +941,7 @@
         }
       };
 
-      // High-resilience multi-layered fallback logic
+      // High-resilience fallback logic
       img.onerror = () => {
         if (myRenderId !== state.currentRenderId) return;
         loadAttempts++;
@@ -1357,9 +984,9 @@
     if (state.spreads.length > 1) {
       const progress =
         (state.currentSpreadIndex / (state.spreads.length - 1)) * 100;
-      progressIndicatorEl.style.width = `${progress}%`;
+      progressIndicatorEl!.style.width = `${progress}%`;
     } else {
-      progressIndicatorEl.style.width = "100%";
+      progressIndicatorEl!.style.width = "100%";
     }
 
     let pageStr = "";
@@ -1368,14 +995,14 @@
     } else {
       pageStr = `${spread[0] + 1}-${spread[1] + 1} / ${state.images.length}`;
     }
-    pageNumEl.textContent = pageStr;
+    pageNumEl!.textContent = pageStr;
 
     preloadAdjacentSpreads();
   }
 
   // --- 6. Navigation Event Handlers ---
 
-  function navigateNext() {
+  function navigateNext(): void {
     if (state.currentSpreadIndex < state.spreads.length - 1) {
       state.currentSpreadIndex++;
       renderView();
@@ -1400,7 +1027,7 @@
     }
   }
 
-  function navigatePrev() {
+  function navigatePrev(): void {
     if (state.currentSpreadIndex > 0) {
       state.currentSpreadIndex--;
       renderView();
@@ -1423,7 +1050,7 @@
     }
   }
 
-  function handleZoneClick(clickedZone) {
+  function handleZoneClick(clickedZone: "left" | "right"): void {
     if (state.isRTL) {
       if (clickedZone === "left") {
         navigateNext();
@@ -1441,7 +1068,7 @@
 
   // --- 7. Keyboard & Event Binding ---
 
-  function handleKeyDown(e) {
+  function handleKeyDown(e: KeyboardEvent): void {
     if (!state.isActive) {
       if (e.key === "Escape" || e.key === "v" || e.key === "V") {
         toggleViewer(true);
@@ -1501,7 +1128,7 @@
     }
   }
 
-  function toggleViewer(forceState) {
+  function toggleViewer(forceState?: boolean): void {
     state.isActive = forceState !== undefined ? forceState : !state.isActive;
     if (state.isActive) {
       document.body.classList.add("cv-active-mode");
@@ -1532,7 +1159,7 @@
   let retryCount = 0;
   const maxRetries = 10;
 
-  function runScraperAndInit() {
+  function runScraperAndInit(): boolean {
     const scrapedImages = scrapeImages();
 
     if (scrapedImages.length >= 3) {
@@ -1565,7 +1192,7 @@
       // Create floating launch badge for future manual toggles
       createManualLaunchButton();
       if (state.isActive) {
-        manualLaunchBtn.style.display = "none";
+        manualLaunchBtn!.style.display = "none";
       }
       return true;
     }
@@ -1573,7 +1200,7 @@
     return false;
   }
 
-  function initViewerWithRetries() {
+  function initViewerWithRetries(): void {
     injectStyles();
 
     // Always build the manual launcher badge immediately so the user has full manual control even if autoscrape fails
@@ -1607,7 +1234,7 @@
 
       const addedImgs = mutations.some((m) =>
         Array.from(m.addedNodes).some(
-          (node) =>
+          (node: any) =>
             node.tagName === "IMG" ||
             (node.querySelectorAll && node.querySelectorAll("img").length > 0),
         ),
@@ -1636,4 +1263,4 @@
   } else {
     window.addEventListener("DOMContentLoaded", initViewerWithRetries);
   }
-})();
+}
