@@ -9,6 +9,8 @@ export default defineConfig({
         name: 'Premium Double-Page Comic Viewer',
         namespace: 'http://tampermonkey.net/',
         version: '1.3.2',
+        updateURL: 'https://raw.githubusercontent.com/wkair/tampermonkey-scripts/main/packages/comic-viewer/dist/comic-viewer.user.js',
+        downloadURL: 'https://raw.githubusercontent.com/wkair/tampermonkey-scripts/main/packages/comic-viewer/dist/comic-viewer.user.js',
         description: '세로 스크롤 만화를 가로 2페이지 양면 뷰어(RTL 지원, 표지 단독 보기, 가로 이미지 감지, 자동 다음화 이동)로 최적화합니다.',
         author: 'Antigravity',
         match: [

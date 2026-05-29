@@ -1,4 +1,8 @@
 node_modules/
-dist/
+**/dist/*
 .DS_Store
 *.log
+
+# Allow tracking of compiled userscripts in workspaces
+!packages/*/dist/*.user.js
+
