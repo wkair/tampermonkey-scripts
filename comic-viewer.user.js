@@ -88,8 +88,8 @@
     currentSpreadIndex: 0, // Index in state.spreads
     isRTL: getStorage("isRTL", true), // Japanese reading direction (Right to Left)
     coverMode: getStorage("coverMode", true), // Keep the first page single
-    nextUrl: null, // URL of the next episode
-    prevUrl: null, // URL of the previous episode
+    nextTarget: null, // Next episode URL string or DOM element
+    prevTarget: null, // Prev episode URL string or DOM element
     keyEventsBound: false, // Prevent redundant key listener registration
     nextChapterConfirm: false, // Confirm going to the next chapter on double input
     prevChapterConfirm: false, // Confirm going to the prev chapter on double input
@@ -320,42 +320,30 @@
       const className = (anchor.className || "").toLowerCase();
       const idName = (anchor.id || "").toLowerCase();
 
-      if (!href || href.startsWith("javascript:") || href.startsWith("#")) {
-        if (
-          nextRegex.test(text) ||
-          className.includes("next") ||
-          idName.includes("next") ||
-          className.includes("btn_nxt")
-        ) {
-          if (!nextCandidate) nextCandidate = anchor;
-        }
-        if (
-          prevRegex.test(text) ||
-          className.includes("prev") ||
-          idName.includes("prev") ||
-          className.includes("btn_prv")
-        ) {
-          if (!prevCandidate) prevCandidate = anchor;
-        }
-        continue;
-      }
-
-      const cleanUrl = resolveUrl(href);
-      if (cleanUrl === window.location.href) continue;
-
-      if (
+      const isNext =
         nextRegex.test(text) ||
         className.includes("btn_nxt") ||
-        className.includes("next-link")
-      ) {
-        nextCandidate = cleanUrl;
-      }
-      if (
+        className.includes("next-link") ||
+        idName.includes("next");
+      const isPrev =
         prevRegex.test(text) ||
         className.includes("btn_prv") ||
-        className.includes("prev-link")
-      ) {
-        prevCandidate = cleanUrl;
+        className.includes("prev-link") ||
+        idName.includes("prev");
+
+      if (isNext && !nextCandidate) {
+        if (href && !href.startsWith("javascript:") && !href.startsWith("#")) {
+          nextCandidate = resolveUrl(href);
+        } else {
+          nextCandidate = anchor;
+        }
+      }
+      if (isPrev && !prevCandidate) {
+        if (href && !href.startsWith("javascript:") && !href.startsWith("#")) {
+          prevCandidate = resolveUrl(href);
+        } else {
+          prevCandidate = anchor;
+        }
       }
     }
 
@@ -370,9 +358,9 @@
           /location\.href\s*=\s*['"]([^'"]+)['"]/,
         );
         if (match) {
-          nextCandidate = match[1];
+          nextCandidate = resolveUrl(match[1]);
         } else {
-          nextCandidate = nxtEl.getAttribute("href");
+          nextCandidate = nxtEl;
         }
       }
     }
@@ -386,19 +374,43 @@
           /location\.href\s*=\s*['"]([^'"]+)['"]/,
         );
         if (match) {
-          prevCandidate = match[1];
+          prevCandidate = resolveUrl(match[1]);
         } else {
-          prevCandidate = prvEl.getAttribute("href");
+          prevCandidate = prvEl;
         }
       }
     }
 
-    state.nextUrl = nextCandidate ? resolveUrl(nextCandidate) : null;
-    state.prevUrl = prevCandidate ? resolveUrl(prevCandidate) : null;
+    state.nextTarget = nextCandidate;
+    state.prevTarget = prevCandidate;
+
+    const getTargetLogStr = (target) => {
+      if (!target) return "없음";
+      if (typeof target === "string") return target;
+      return `DOM Element (${target.tagName.toLowerCase()}${target.className ? "." + target.className.replace(/\s+/g, ".") : ""})`;
+    };
 
     console.log(
-      `[2-Page Comic Viewer] 다음화 링크: ${state.nextUrl || "없음"}, 이전화 링크: ${state.prevUrl || "없음"}`,
+      `[2-Page Comic Viewer] 다음화 링크: ${getTargetLogStr(state.nextTarget)}, 이전화 링크: ${getTargetLogStr(state.prevTarget)}`,
     );
+  }
+
+  // Unified robust navigation execution helper
+  function performNavigation(target) {
+    if (!target) return;
+    if (typeof target === "string") {
+      window.location.href = state.isActive ? appendViewerParam(target) : target;
+    } else if (target && typeof target.click === "function") {
+      // If it's an <a> anchor element with a valid href, navigate directly with cv_view preserved
+      const href = target.getAttribute("href");
+      if (href && !href.startsWith("javascript:") && !href.startsWith("#")) {
+        const fullUrl = resolveUrl(href);
+        window.location.href = state.isActive ? appendViewerParam(fullUrl) : fullUrl;
+      } else {
+        // Fallback to triggering the click event (useful for onclick scripts / custom ajax buttons)
+        target.click();
+      }
+    }
   }
 
   // --- 4. Premium Overlay UI & Styles ---
@@ -417,16 +429,17 @@
     style.id = "premium-comic-viewer-styles";
     style.textContent = `
             :root {
-                --cv-bg: #0d0d0d;
-                --cv-panel-bg: rgba(18, 18, 18, 0.82);
+                --cv-bg: #09090b;
+                --cv-panel-bg: rgba(15, 15, 20, 0.88);
                 --cv-panel-border: rgba(255, 255, 255, 0.08);
-                --cv-accent: #3b82f6;
-                --cv-accent-glow: rgba(59, 130, 246, 0.35);
-                --cv-text: #e2e8f0;
+                --cv-accent: linear-gradient(90deg, #a78bfa, #c084fc);
+                --cv-accent-solid: #c084fc;
+                --cv-accent-glow: rgba(168, 85, 247, 0.2);
+                --cv-text: #f4f4f5;
                 --cv-text-muted: #94a3b8;
-                --cv-panel-blur: blur(16px) saturate(180%);
-                --cv-radius: 12px;
-                --cv-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+                --cv-panel-blur: blur(24px) saturate(190%);
+                --cv-radius: 16px;
+                --cv-shadow: 0 16px 48px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.08);
             }
 
             .cv-overlay {
@@ -561,7 +574,7 @@
                 height: 40px;
                 border: 3px solid rgba(255, 255, 255, 0.1);
                 border-radius: 50%;
-                border-top-color: var(--cv-accent);
+                border-top-color: var(--cv-accent-solid);
                 animation: cv-spin 0.8s linear infinite;
             }
 
@@ -603,29 +616,35 @@
 
             .cv-btn {
                 background: transparent;
-                border: none;
-                color: var(--cv-text);
-                font-size: 14px;
-                font-weight: 500;
-                padding: 6px 12px;
-                border-radius: 16px;
+                border: 1px solid transparent;
+                color: var(--cv-text-muted);
+                font-size: 13px;
+                font-weight: 600;
+                padding: 6px 14px;
+                border-radius: 20px;
                 cursor: pointer;
                 display: flex;
                 align-items: center;
                 gap: 6px;
-                transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
                 user-select: none;
             }
 
             .cv-btn:hover {
-                background: rgba(255, 255, 255, 0.08);
-                color: #ffffff;
+                background: rgba(255, 255, 255, 0.08) !important;
+                border-color: rgba(255, 255, 255, 0.12) !important;
+                color: #ffffff !important;
+                transform: translateY(-1px);
+            }
+
+            .cv-btn:active {
+                transform: translateY(1px);
             }
 
             .cv-btn.active {
-                background: var(--cv-accent);
-                color: #ffffff;
-                box-shadow: 0 0 10px var(--cv-accent-glow);
+                background: rgba(168, 85, 247, 0.08);
+                color: #e9d5ff;
+                border-color: rgba(168, 85, 247, 0.25);
             }
 
             .cv-divider {
@@ -661,7 +680,7 @@
                 width: 0%;
                 background: var(--cv-accent);
                 border-radius: 3px;
-                box-shadow: 0 0 6px var(--cv-accent-glow);
+                box-shadow: 0 0 10px var(--cv-accent-glow);
                 position: absolute;
                 left: 0;
                 top: 0;
@@ -750,28 +769,30 @@
                 bottom: 20px;
                 right: 20px;
                 z-index: 999998;
-                background: rgba(30, 41, 59, 0.75);
-                backdrop-filter: blur(8px);
-                -webkit-backdrop-filter: blur(8px);
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                color: #ffffff;
-                padding: 10px 16px;
+                background: rgba(15, 15, 20, 0.9) !important;
+                backdrop-filter: var(--cv-panel-blur);
+                -webkit-backdrop-filter: var(--cv-panel-blur);
+                border: 1px solid var(--cv-panel-border) !important;
+                color: #f4f4f5 !important;
+                padding: 10px 18px;
                 border-radius: 20px;
                 font-size: 13px;
                 font-weight: 600;
                 cursor: pointer;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                box-shadow: var(--cv-shadow);
                 display: flex;
                 align-items: center;
                 gap: 6px;
-                transition: all 0.2s ease;
+                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
                 user-select: none;
             }
 
             .cv-manual-launcher:hover {
-                background: var(--cv-accent);
-                transform: scale(1.05);
-                box-shadow: 0 0 10px var(--cv-accent-glow);
+                background: rgba(28, 25, 38, 0.95) !important;
+                border-color: rgba(168, 85, 247, 0.4) !important;
+                color: #e9d5ff !important;
+                transform: translateY(-2px) scale(1.02);
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
             }
         `;
     document.head.appendChild(style);
@@ -783,7 +804,7 @@
 
     manualLaunchBtn = document.createElement("div");
     manualLaunchBtn.className = "cv-manual-launcher";
-    manualLaunchBtn.innerHTML = "📖 2Page 뷰어";
+    manualLaunchBtn.innerHTML = "◫ 2Page 뷰어";
     manualLaunchBtn.title = "2페이지 가로 양면 뷰어 강제 활성화";
     manualLaunchBtn.addEventListener("click", () => {
       const scraped = scrapeImages();
@@ -838,7 +859,7 @@
 
     const prevBtn = document.createElement("button");
     prevBtn.className = "cv-btn";
-    prevBtn.innerHTML = "◀";
+    prevBtn.innerHTML = "←";
     prevBtn.title = "이전 페이지";
     prevBtn.addEventListener("click", navigatePrev);
     ctrlPanelEl.appendChild(prevBtn);
@@ -848,7 +869,7 @@
     const directionBtn = document.createElement("button");
     directionBtn.className = `cv-btn cv-toggle-btn ${state.isRTL ? "active" : ""}`;
     directionBtn.id = "cv-dir-btn";
-    directionBtn.innerHTML = state.isRTL ? "⇄ ◀" : "⇄ ▶";
+    directionBtn.innerHTML = state.isRTL ? "⇄ RTL" : "⇄ LTR";
     directionBtn.title = state.isRTL
       ? "읽는 방향: 우측에서 좌측 (RTL)"
       : "읽는 방향: 좌측에서 우측 (LTR)";
@@ -856,7 +877,7 @@
       state.isRTL = !state.isRTL;
       setStorage("isRTL", state.isRTL);
       directionBtn.classList.toggle("active", state.isRTL);
-      directionBtn.innerHTML = state.isRTL ? "⇄ ◀" : "⇄ ▶";
+      directionBtn.innerHTML = state.isRTL ? "⇄ RTL" : "⇄ LTR";
       directionBtn.title = state.isRTL
         ? "읽는 방향: 우측에서 좌측 (RTL)"
         : "읽는 방향: 좌측에서 우측 (LTR)";
@@ -875,7 +896,7 @@
     const coverBtn = document.createElement("button");
     coverBtn.className = `cv-btn cv-toggle-btn ${state.coverMode ? "active" : ""}`;
     coverBtn.id = "cv-cover-btn";
-    coverBtn.innerHTML = "📔";
+    coverBtn.innerHTML = "◫ 표지";
     coverBtn.title = state.coverMode
       ? "첫 페이지 단독 표지 모드: 켜짐"
       : "첫 페이지 단독 표지 모드: 꺼짐";
@@ -901,7 +922,7 @@
     const transBtn = document.createElement("button");
     transBtn.className = `cv-btn cv-toggle-btn ${state.transitionMode === "fade" ? "active" : ""}`;
     transBtn.id = "cv-trans-btn";
-    transBtn.innerHTML = state.transitionMode === "fade" ? "✨" : "⚡";
+    transBtn.innerHTML = state.transitionMode === "fade" ? "✦ 페이드" : "≫ 즉시";
     transBtn.title =
       state.transitionMode === "fade"
         ? "화면 전환 효과: 크로스페이드 (부드럽게)"
@@ -911,7 +932,7 @@
         state.transitionMode === "fade" ? "instant" : "fade";
       setStorage("transitionMode", state.transitionMode);
       transBtn.classList.toggle("active", state.transitionMode === "fade");
-      transBtn.innerHTML = state.transitionMode === "fade" ? "✨" : "⚡";
+      transBtn.innerHTML = state.transitionMode === "fade" ? "✦ 페이드" : "≫ 즉시";
       transBtn.title =
         state.transitionMode === "fade"
           ? "화면 전환 효과: 크로스페이드 (부드럽게)"
@@ -983,7 +1004,7 @@
 
     const nextBtn = document.createElement("button");
     nextBtn.className = "cv-btn";
-    nextBtn.innerHTML = "▶";
+    nextBtn.innerHTML = "→";
     nextBtn.title = "다음 페이지";
     nextBtn.addEventListener("click", navigateNext);
     ctrlPanelEl.appendChild(nextBtn);
@@ -1002,12 +1023,7 @@
 
   let idleTimeout = null;
   function setupIdleFader() {
-    const resetIdle = (e) => {
-      // Ignore keydown and click events to prevent page navigation from waking up the menu
-      if (e && (e.type === "keydown" || e.type === "click")) {
-        return;
-      }
-
+    const resetIdle = () => {
       if (ctrlPanelEl) {
         ctrlPanelEl.classList.remove("idle");
         document.body.style.cursor = "default";
@@ -1022,8 +1038,6 @@
     };
 
     window.addEventListener("mousemove", resetIdle);
-    window.addEventListener("keydown", resetIdle);
-    window.addEventListener("click", resetIdle);
     resetIdle();
   }
 
@@ -1058,6 +1072,11 @@
 
     while (i < state.images.length) {
       const currentImg = state.images[i];
+      if (!currentImg) {
+        i++;
+        continue;
+      }
+      
       if (currentImg.aspect > 1.25) {
         spreads.push([i]);
         i++;
@@ -1066,7 +1085,7 @@
 
       if (i + 1 < state.images.length) {
         const nextImg = state.images[i + 1];
-        if (nextImg.aspect > 1.25) {
+        if (nextImg && nextImg.aspect > 1.25) {
           spreads.push([i]);
           i++;
         } else {
@@ -1150,6 +1169,10 @@
     const spread = state.spreads[state.currentSpreadIndex];
     if (!spread) return;
 
+    // Track active render call to prevent race conditions during rapid navigation
+    state.currentRenderId = (state.currentRenderId || 0) + 1;
+    const myRenderId = state.currentRenderId;
+
     // Find all active/old spread containers in the DOM
     const oldSpreads = Array.from(
       viewAreaEl.querySelectorAll(".cv-spread-container"),
@@ -1172,31 +1195,48 @@
       spreadContainer.style.zIndex = "2";
       oldSpreads.forEach((el) => {
         el.style.zIndex = "1";
+        el.style.transition = "none";
       });
     }
 
     let swapDone = false;
     const triggerSwap = () => {
       if (swapDone) return;
-      swapDone = true;
+      
+      // If this render call is no longer the active one, abort swap and discard this container
+      if (myRenderId !== state.currentRenderId) {
+        spreadContainer.remove();
+        return;
+      }
 
+      swapDone = true;
       clearTimeout(safeguardTimeout);
 
       if (state.transitionMode === "fade") {
         // Smooth fade-in
         setTimeout(() => {
+          if (myRenderId !== state.currentRenderId) return;
           spreadContainer.style.opacity = "1";
           spreadContainer.style.transform = "scale(1)";
         }, 20);
 
         // Clean up old spreads after transition finishes
         setTimeout(() => {
+          if (myRenderId !== state.currentRenderId) return;
           oldSpreads.forEach((el) => el.remove());
         }, 250);
       } else {
-        // Instant swap: show new container immediately, purge old spreads instantly with 0ms black flash
+        // Instant swap: show new container immediately
         spreadContainer.style.opacity = "1";
-        oldSpreads.forEach((el) => el.remove());
+        
+        // Use double requestAnimationFrame to ensure the new container is fully painted
+        // on screen by the browser before removing the old spreads, avoiding any 1-frame black flash.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (myRenderId !== state.currentRenderId) return;
+            oldSpreads.forEach((el) => el.remove());
+          });
+        });
       }
     };
 
@@ -1209,8 +1249,8 @@
       }
     };
 
-    // Safeguard timeout: if images don't load/decode in 350ms, swap anyway to show spinner/progress
-    const safeguardTimeout = setTimeout(triggerSwap, 350);
+    // Safeguard timeout: if images don't load/decode in 5000ms, swap anyway to show spinner/progress
+    const safeguardTimeout = setTimeout(triggerSwap, 5000);
 
     spread.forEach((imgIdx) => {
       const imgData = state.images[imgIdx];
@@ -1252,16 +1292,21 @@
       };
 
       img.onload = () => {
+        if (myRenderId !== state.currentRenderId) return;
         if (typeof img.decode === "function") {
           // Pre-decode the image asynchronously to prevent rendering/decoding flash on GPU upload
           img
             .decode()
-            .then(handleDecoded)
+            .then(() => {
+              if (myRenderId !== state.currentRenderId) return;
+              handleDecoded();
+            })
             .catch((err) => {
               console.log(
                 "[2-Page Comic Viewer] 이미지 디코딩 실패, 기본 로드 진행:",
                 err,
               );
+              if (myRenderId !== state.currentRenderId) return;
               handleDecoded();
             });
         } else {
@@ -1271,6 +1316,7 @@
 
       // High-resilience multi-layered fallback logic
       img.onerror = () => {
+        if (myRenderId !== state.currentRenderId) return;
         loadAttempts++;
         if (loadAttempts === 1) {
           console.log(
@@ -1336,13 +1382,11 @@
       state.nextChapterConfirm = false;
       state.prevChapterConfirm = false;
     } else {
-      if (state.nextUrl) {
+      if (state.nextTarget) {
         if (state.nextChapterConfirm) {
           showAlert("다음 화로 이동합니다...");
           setTimeout(() => {
-            window.location.href = state.isActive
-              ? appendViewerParam(state.nextUrl)
-              : state.nextUrl;
+            performNavigation(state.nextTarget);
           }, 800);
         } else {
           state.nextChapterConfirm = true;
@@ -1363,13 +1407,11 @@
       state.nextChapterConfirm = false;
       state.prevChapterConfirm = false;
     } else {
-      if (state.prevUrl) {
+      if (state.prevTarget) {
         if (state.prevChapterConfirm) {
           showAlert("이전 화로 이동합니다...");
           setTimeout(() => {
-            window.location.href = state.isActive
-              ? appendViewerParam(state.prevUrl)
-              : state.prevUrl;
+            performNavigation(state.prevTarget);
           }, 800);
         } else {
           state.prevChapterConfirm = true;
