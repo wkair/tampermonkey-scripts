@@ -842,6 +842,7 @@
       }
     }, toggleViewer = function(forceState) {
       state.isActive = forceState !== void 0 ? forceState : !state.isActive;
+      setStorage("viewerActive", state.isActive);
       if (state.isActive) {
         document.body.classList.add("cv-active-mode");
         if (overlayEl) {
@@ -874,7 +875,7 @@
         scrapeNavigationLinks();
         buildSpreads();
         createOverlay();
-        if (hasViewerFlag) {
+        if (shouldBeActive) {
           toggleViewer(true);
         } else {
           toggleViewer(false);
@@ -934,6 +935,11 @@
     console.log(
       "[2-Page Comic Viewer] 스크립트 로드됨. 에피소드 페이지 확인 완료."
     );
+    let shouldBeActive = getStorage("viewerActive", false);
+    if (hasViewerFlag) {
+      shouldBeActive = true;
+      setStorage("viewerActive", true);
+    }
     const state = {
       isActive: false,
       // Set to false initially, will set true on successful load

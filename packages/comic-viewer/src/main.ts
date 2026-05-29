@@ -36,6 +36,13 @@ if (!urlParams.has("wr_id")) {
     localStorage.setItem("cv_" + key, JSON.stringify(value));
   }
 
+  // Read initial active state from storage
+  let shouldBeActive = getStorage("viewerActive", false);
+  if (hasViewerFlag) {
+    shouldBeActive = true;
+    setStorage("viewerActive", true);
+  }
+
   // URL Resolver using native browser engine
   function resolveUrl(src: string): string {
     if (!src) return "";
@@ -1130,6 +1137,7 @@ if (!urlParams.has("wr_id")) {
 
   function toggleViewer(forceState?: boolean): void {
     state.isActive = forceState !== undefined ? forceState : !state.isActive;
+    setStorage("viewerActive", state.isActive);
     if (state.isActive) {
       document.body.classList.add("cv-active-mode");
       if (overlayEl) {
@@ -1173,8 +1181,8 @@ if (!urlParams.has("wr_id")) {
       injectStyles();
       createOverlay();
 
-      // Auto-launch the viewer ONLY if hasViewerFlag is true!
-      if (hasViewerFlag) {
+      // Auto-launch the viewer if shouldBeActive is true!
+      if (shouldBeActive) {
         toggleViewer(true);
       } else {
         toggleViewer(false);
