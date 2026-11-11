@@ -1,6 +1,6 @@
 # 토끼 뷰어 작업 인계
 
-이 폴더가 앞으로 사용할 프로젝트 루트입니다. 최종 스크립트는 `toki-viewer-fixed.user.js`, 현재 버전은 `261105000003`입니다.
+이 패키지는 `tampermonkey-scripts/packages/comic-viewer`에 있습니다. 소스는 `src/main.js`, 메타데이터는 `userscript.json`, 최종 스크립트는 `dist/comic-viewer.user.js`이며, 현재 버전은 `261105000003`입니다.
 
 ## 사용자가 원하는 동작
 
@@ -16,7 +16,7 @@
 
 ## 개발과 검증
 
-`npm ci` 후 `npm test`. 현재 64개 테스트가 있습니다. 테스트는 jsdom 기반이고 실제 이미지 다운로드나 실기기 렌더링을 검증하지 않습니다. 사용자는 이전 버전에서 뷰어가 잘 열린다고 확인했습니다.
+저장소 루트에서 `npm ci` 후 `npm test`. 현재 64개 호환성 테스트가 있습니다. `npm run dev:comic-viewer`로 개발 서버를 실행하고 `npm run build:comic-viewer` 또는 `npm run build:all`로 빌드합니다. `npm run test:build --workspace=packages/comic-viewer`는 빌드 후 배포 파일의 메타데이터와 실행을 검증합니다. 의존성 잠금 파일은 저장소 루트의 `package-lock.json`을 사용합니다. 테스트는 jsdom 기반이고 실제 이미지 다운로드나 실기기 렌더링을 검증하지 않습니다. 사용자는 이전 버전에서 뷰어가 잘 열린다고 확인했습니다.
 
 `261105000003`에서는 첫 장 단독 설정을 `toki-viewer.first-page-alone` 키로 저장합니다. 브라우저 저장소가 차단되면 메모리의 선택을 유지해 재진입·SPA 회차 이동에서 재사용합니다. 켜기와 끄기 모두에 대해 재진입·새 페이지 복원, 다음화 자동 복귀, 저장소 차단 시 동작을 검사했습니다.
 

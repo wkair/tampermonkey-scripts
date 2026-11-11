@@ -7,6 +7,9 @@
     "packages/*"
   ],
   "scripts": {
+    "dev:comic-viewer": "npm run dev --workspace=packages/comic-viewer",
+    "build:comic-viewer": "npm run build --workspace=packages/comic-viewer",
+    "build:all": "npm run build --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
     "test:comic-viewer": "npm test --workspace=packages/comic-viewer"
   }

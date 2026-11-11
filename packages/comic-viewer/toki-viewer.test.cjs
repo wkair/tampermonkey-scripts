@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { JSDOM } = require('jsdom');
-const script = fs.readFileSync(`${__dirname}/toki-viewer-fixed.user.js`, 'utf8');
+const script = fs.readFileSync(`${__dirname}/src/main.js`, 'utf8');
 const A = '/manhwa/10454/103310';
 const B = '/manhwa/10454/103311';
 const tick = () => new Promise(resolve => setImmediate(resolve));

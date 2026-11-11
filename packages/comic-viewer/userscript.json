@@ -1,0 +1,25 @@
+{
+  "name": "토끼 뷰어 (새 테마 호환 수정본)",
+  "description": "두 쪽 보기. i: 열기/닫기, j/k: 다음/이전 두 쪽.",
+  "version": "261105000003",
+  "author": "nanikit (original), compatibility patch",
+  "namespace": "https://greasyfork.org/ko/users/713014-nanikit",
+  "match": [
+    "https://*.com/bbs/*",
+    "https://*.com/end/*",
+    "https://*.com/manhwa-end/*",
+    "https://*.com/manhwa/*",
+    "https://*.org/manhwa-end/*",
+    "https://*.org/manhwa/*",
+    "https://*.com/novel/*",
+    "https://*.com/webtoon/*",
+    "https://*.org/webtoon/*",
+    "https://*.net/bbs/*",
+    "https://*.net/comic/*"
+  ],
+  "run-at": "document-idle",
+  "noframes": true,
+  "grant": "none",
+  "updateURL": "https://raw.githubusercontent.com/wkair/tampermonkey-scripts/main/packages/comic-viewer/dist/comic-viewer.user.js",
+  "downloadURL": "https://raw.githubusercontent.com/wkair/tampermonkey-scripts/main/packages/comic-viewer/dist/comic-viewer.user.js"
+}

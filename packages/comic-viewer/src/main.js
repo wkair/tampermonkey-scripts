@@ -1,25 +1,3 @@
-// ==UserScript==
-// @name           토끼 뷰어 (새 테마 호환 수정본)
-// @description    두 쪽 보기. i: 열기/닫기, j/k: 다음/이전 두 쪽.
-// @version        261105000003
-// @author         nanikit (original), compatibility patch
-// @namespace      https://greasyfork.org/ko/users/713014-nanikit
-// @match          https://*.com/bbs/*
-// @match          https://*.com/end/*
-// @match          https://*.com/manhwa-end/*
-// @match          https://*.com/manhwa/*
-// @match          https://*.org/manhwa-end/*
-// @match          https://*.org/manhwa/*
-// @match          https://*.com/novel/*
-// @match          https://*.com/webtoon/*
-// @match          https://*.org/webtoon/*
-// @match          https://*.net/bbs/*
-// @match          https://*.net/comic/*
-// @run-at         document-idle
-// @noframes
-// @license        MIT
-// @grant          none
-// ==/UserScript==
 "use strict";
 
 (() => {
