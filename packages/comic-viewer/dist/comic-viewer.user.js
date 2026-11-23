@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         토끼 뷰어 (새 테마 호환 수정본)
 // @namespace    https://greasyfork.org/ko/users/713014-nanikit
-// @version      261123000005
+// @version      261123000006
 // @author       nanikit (original), compatibility patch
 // @description  두 쪽 보기. i: 열기/닫기, j/k: 다음/이전 두 쪽.
 // @downloadURL  https://raw.githubusercontent.com/wkair/tampermonkey-scripts/main/packages/comic-viewer/dist/comic-viewer.user.js
@@ -25,7 +25,7 @@
 (function() {
 	"use strict";
 	(() => {
-		const VERSION = "261123000005";
+		const VERSION = "261123000006";
 		const SPREAD_RATIO = 1.2;
 		const RESUME_KEY = "toki-viewer.resume-episode";
 		const COVER_KEY = "toki-viewer.first-page-alone";
@@ -286,8 +286,6 @@
 				rtl: ["M20 7H4m5-5L4 7l5 5M4 17h16m-5-5 5 5-5 5"],
 				ltr: ["M4 7h16m-5-5 5 5-5 5M20 17H4m5-5-5 5 5 5"],
 				cover: ["M12 5v15M3 4h6a3 3 0 0 1 3 3 3 3 0 0 1 3-3h6v15h-6a3 3 0 0 0-3 2 3 3 0 0 0-3-2H3Z"],
-				single: ["M3 5h18v14H3Z"],
-				paired: ["M3 5h18v14H3Zm9 0v14"],
 				expand: ["M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5"],
 				collapse: ["M3 8h5V3m8 0v5h5M8 21v-5H3m18 0h-5v5"],
 				close: ["m6 6 12 12M18 6 6 18"]
@@ -337,6 +335,11 @@
 			let panX = 0;
 			let panY = 0;
 			let viewKey = "";
+			let pressTimer;
+			let tapTimer;
+			let press = null;
+			let longPressConsumed = false;
+			let pageMenu = null;
 			const imageCache = new Map();
 			const pageTypes = new Map();
 			const singleOverrides = new Map();
@@ -469,8 +472,6 @@
 				panY = Math.max(-limitY, Math.min(limitY, panY));
 				spread.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
 				spread.style.cursor = zoom > 1 ? "grab" : "";
-				if (zoom > 1 && frames.some((frame) => frame.mode === document.activeElement)) spread.focus({ preventScroll: true });
-				for (const frame of frames) frame.mode.style.display = controlsVisible && zoom === 1 && frame.entry ? "inline-flex" : "none";
 			}
 			function resetZoom() {
 				zoom = 1;
@@ -478,6 +479,7 @@
 				applyZoom();
 			}
 			function resizeViewer() {
+				cancelPendingActions();
 				for (const frame of frames) if (frame.image) styleImage(frame.image, frame);
 				applyZoom();
 			}
@@ -485,13 +487,12 @@
 				if (closed) return;
 				clearTimeout(controlsTimer);
 				controlsVisible = visible;
-				if (!visible && (toolbar.contains(document.activeElement) || frames.some((frame) => frame.mode === document.activeElement))) spread.focus({ preventScroll: true });
+				if (!visible && toolbar.contains(document.activeElement)) spread.focus({ preventScroll: true });
 				toolbar.hidden = !visible;
 				toolbar.inert = !visible;
 				toolbar.style.display = visible ? "flex" : "none";
 				versionLabel.hidden = !visible;
 				versionLabel.style.display = visible ? "block" : "none";
-				for (const frame of frames) frame.mode.style.display = visible && zoom === 1 && frame.entry ? "inline-flex" : "none";
 				if (visible) controlsTimer = setTimeout(() => setControlsVisible(false), 3e3);
 			}
 			toolbar.addEventListener("touchstart", () => setControlsVisible(true), { passive: true });
@@ -512,26 +513,123 @@
 					entry: null,
 					src: null
 				};
-				frame.mode = makeButton("", () => {
-					const entry = frame.entry;
-					const key = imageKey(entry);
-					if (!key) return;
-					singleOverrides.set(key, !isSingle(entry));
-					start = snapshot.entries.findIndex((item) => item.key === entry.key);
-					draw();
-					frames.find((item) => item.entry?.key === entry.key)?.mode.focus({ preventScroll: true });
-					setControlsVisible(true);
-				}, report);
-				frame.mode.dataset.tokiPageMode = "";
 				const retry = makeButton("다시 시도", () => loadFrame(frame, frame.entry, true), report);
 				frame.retry = retry;
 				message.append(text, retry);
-				element.append(message, frame.mode);
+				element.append(message);
 				spread.append(element);
 				return frame;
 			});
 			viewport.append(spread);
 			dialog.append(menuStyle, toolbar, versionLabel, notice, viewport);
+			function cancelPress() {
+				clearTimeout(pressTimer);
+				press = null;
+			}
+			function cancelTap() {
+				clearTimeout(tapTimer);
+				lastTap = null;
+			}
+			function cancelPendingActions() {
+				cancelPress();
+				cancelTap();
+			}
+			function handleTap(x) {
+				const bounds = viewport.getBoundingClientRect();
+				const position = bounds.width ? (x - bounds.left) / bounds.width : .5;
+				if (zoom > 1 || position >= .4 && position <= .6) setControlsVisible(!controlsVisible);
+				else navigateGesture(position < .4 ? rtl ? 1 : -1 : rtl ? -1 : 1);
+			}
+			function frameAt(target) {
+				const element = target.closest?.("[data-toki-page]");
+				return frames.find((frame) => frame.element === element && frame.entry?.page);
+			}
+			function dismissPageMenu(restoreFocus = true) {
+				if (!pageMenu) return;
+				const previousMenu = pageMenu;
+				pageMenu = null;
+				longPressConsumed = false;
+				lastTouchAction = Date.now();
+				previousMenu.overlay.remove();
+				viewport.inert = false;
+				setControlsVisible(previousMenu.controlsVisible);
+				if (restoreFocus && !closed) previousMenu.frame.element.focus({ preventScroll: true });
+			}
+			function openPageMenu(frame) {
+				cancelPendingActions();
+				const entry = frame?.entry;
+				const key = imageKey(entry);
+				if (closed || pageMenu || !key) return;
+				const overlay = document.createElement("div");
+				overlay.dataset.tokiPagePopup = "";
+				overlay.style.cssText = "position:absolute;inset:0;z-index:4;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;background:#0008;touch-action:none";
+				const panel = document.createElement("section");
+				panel.setAttribute("role", "dialog");
+				panel.setAttribute("aria-modal", "true");
+				panel.setAttribute("aria-label", `${entry.key}쪽 보기 설정`);
+				panel.style.cssText = "position:relative;z-index:1;width:280px;max-width:100%;max-height:100%;overflow:auto;box-sizing:border-box;padding:20px;display:flex;flex-direction:column;gap:12px;border:1px solid #ffffff30;border-radius:18px;background:#191f29;color:#e5eaf3;box-shadow:0 16px 48px #0008";
+				const heading = document.createElement("strong");
+				heading.textContent = `${entry.key}쪽 보기 설정`;
+				heading.style.cssText = "font:600 17px/1.5 system-ui,sans-serif";
+				const single = isSingle(entry);
+				const toggle = makeButton(`${entry.key}쪽 ${single ? "두 쪽에 묶기" : "단독 보기"}`, () => {
+					if (pageMenu?.toggle !== toggle) return;
+					if (imageKey(frame.entry) !== key) {
+						dismissPageMenu();
+						return;
+					}
+					singleOverrides.set(key, !isSingle(frame.entry));
+					start = snapshot.entries.findIndex((item) => item.key === entry.key);
+					dismissPageMenu();
+					draw();
+					frames.find((item) => item.entry?.key === entry.key)?.element.focus({ preventScroll: true });
+				}, report);
+				toggle.setAttribute("aria-pressed", String(single));
+				toggle.style.cssText += ";background:#b9d2ff;color:#14243c;border:0;font-weight:600";
+				const cancel = makeButton("취소", () => dismissPageMenu(), report);
+				cancel.style.cssText += ";background:transparent;color:#e5eaf3;border-color:#ffffff30";
+				const backdrop = makeButton("", () => dismissPageMenu(), report);
+				backdrop.setAttribute("aria-label", "보기 설정 닫기");
+				backdrop.tabIndex = -1;
+				backdrop.dataset.tokiPopupBackdrop = "";
+				backdrop.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;padding:0;background:transparent;touch-action:none";
+				panel.append(heading, toggle, cancel);
+				overlay.append(backdrop, panel);
+				pageMenu = {
+					overlay,
+					frame,
+					key,
+					toggle,
+					cancel,
+					controlsVisible
+				};
+				setControlsVisible(false);
+				viewport.inert = true;
+				dialog.append(overlay);
+				toggle.focus({ preventScroll: true });
+			}
+			function armPress(target, x, y) {
+				cancelPress();
+				const frame = frameAt(target);
+				if (!frame || target.closest("button") || pageMenu) return;
+				press = {
+					x,
+					y,
+					frame,
+					key: imageKey(frame.entry)
+				};
+				const pending = press;
+				pressTimer = setTimeout(() => {
+					if (press !== pending || imageKey(frame.entry) !== pending.key || closed) return;
+					longPressConsumed = true;
+					lastTouchAction = Date.now();
+					swipe = pinch = mousePan = null;
+					openPageMenu(frame);
+				}, 550);
+			}
+			function movePress(x, y) {
+				if (press && Math.hypot(x - press.x, y - press.y) > 10) cancelPress();
+			}
 			function imageKey(entry) {
 				return entry?.page?.src ? JSON.stringify([
 					entry.key,
@@ -701,6 +799,8 @@
 					fit
 				]);
 				if (viewKey !== nextViewKey) {
+					cancelPendingActions();
+					dismissPageMenu();
 					viewKey = nextViewKey;
 					zoom = 1;
 					panX = panY = 0;
@@ -731,18 +831,9 @@
 					frame.element.style.display = fullWidth && index === 1 ? "none" : "block";
 					loadFrame(frame, pages[index]);
 					if (frame.image) styleImage(frame.image, frame);
-					const single = isSingle(frame.entry);
-					frame.mode.disabled = !frame.entry?.page;
-					frame.mode.setAttribute("aria-pressed", String(single));
-					setToolIcon(frame.mode, `${frame.entry?.key || ""}쪽 ${single ? "두 쪽에 묶기" : "단독 보기"}`, single ? "paired" : "single");
-					Object.assign(frame.mode.style, {
-						position: "absolute",
-						top: "12px",
-						right: "12px",
-						zIndex: "1",
-						background: "rgba(20,24,32,.85)",
-						display: controlsVisible && frame.entry ? "inline-flex" : "none"
-					});
+					frame.element.tabIndex = frame.entry?.page ? 0 : -1;
+					frame.element.setAttribute("aria-label", `${frame.entry?.key || ""}쪽 · 길게 누르면 보기 설정`);
+					frame.element.setAttribute("aria-haspopup", "dialog");
 				});
 				applyZoom();
 				preloadNext(entries, starts);
@@ -752,6 +843,12 @@
 				const index = starts.indexOf(start);
 				start = starts[Math.max(0, Math.min(starts.length - 1, index + delta))] ?? 0;
 				draw();
+			}
+			function navigateGesture(delta) {
+				const starts = getStarts();
+				const position = starts.indexOf(start);
+				if (position + delta < 0 || position + delta >= starts.length) setControlsVisible(true);
+				else move(delta);
 			}
 			function changeEpisode(direction) {
 				const control = findEpisodeControl(direction);
@@ -776,6 +873,8 @@
 				if (closed) return;
 				closed = true;
 				clearTimeout(controlsTimer);
+				cancelPendingActions();
+				dismissPageMenu(false);
 				for (const frame of frames) frame.unsubscribe?.();
 				for (const record of imageCache.values()) releaseImage(record);
 				imageCache.clear();
@@ -790,6 +889,7 @@
 					else htmlStyle.removeProperty("overflow");
 					removeEventListener("keydown", keydown, true);
 					removeEventListener("resize", resizeViewer);
+					removeEventListener("blur", cancelPendingActions);
 					document.removeEventListener("fullscreenchange", updateFullscreenButton);
 					document.removeEventListener("load", sourceLoaded, true);
 					if (focusBefore?.isConnected) focusBefore.focus?.({ preventScroll: true });
@@ -797,6 +897,26 @@
 				}
 			}
 			function keydown(event) {
+				if (pageMenu) {
+					event.stopImmediatePropagation();
+					if (event.key === "Escape") {
+						event.preventDefault();
+						dismissPageMenu();
+					} else if (event.key === "Tab") {
+						event.preventDefault();
+						(document.activeElement === pageMenu.toggle ? pageMenu.cancel : pageMenu.toggle).focus();
+					} else if (!["Enter", " "].includes(event.key)) event.preventDefault();
+					return;
+				}
+				if (event.key === "ContextMenu" || event.shiftKey && event.key === "F10") {
+					const frame = frameAt(event.target);
+					if (frame) {
+						event.preventDefault();
+						event.stopImmediatePropagation();
+						openPageMenu(frame);
+					}
+					return;
+				}
 				if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || isTyping(event)) return;
 				const key = event.key.toLowerCase();
 				let action;
@@ -832,6 +952,7 @@
 			let mousePan = null;
 			let lastTap = null;
 			let lastTouchAction = -Infinity;
+			let lastTouchStart = -Infinity;
 			function touchGeometry(touches) {
 				const [a, b] = touches;
 				const bounds = viewport.getBoundingClientRect();
@@ -842,9 +963,12 @@
 				};
 			}
 			viewport.addEventListener("touchstart", (event) => {
+				lastTouchStart = Date.now();
+				cancelPress();
 				if (event.target.closest("button")) return;
 				if (event.touches.length >= 2) {
-					event.preventDefault();
+					cancelTap();
+					if (event.cancelable) event.preventDefault();
 					pinch = {
 						...touchGeometry(event.touches),
 						zoom,
@@ -857,6 +981,9 @@
 					return;
 				}
 				const point = event.touches.length === 1 ? event.touches[0] : null;
+				const doubleTap = point && lastTap && Date.now() - lastTap.time < 320 && Math.hypot(point.clientX - lastTap.x, point.clientY - lastTap.y) < 30;
+				if (doubleTap) clearTimeout(tapTimer);
+				else cancelTap();
 				swipe = point ? {
 					id: point.identifier,
 					x: point.clientX,
@@ -865,12 +992,14 @@
 					moved: false,
 					panX,
 					panY,
-					panning: zoom > 1
+					panning: zoom > 1,
+					doubleTap: !!doubleTap
 				} : null;
+				if (point && !longPressConsumed) armPress(event.target, point.clientX, point.clientY);
 			}, { passive: false });
 			viewport.addEventListener("touchmove", (event) => {
 				if (pinch && event.touches.length >= 2) {
-					event.preventDefault();
+					if (event.cancelable) event.preventDefault();
 					const current = touchGeometry(event.touches);
 					zoom = Math.max(1, Math.min(4, pinch.zoom * current.distance / pinch.distance));
 					panX = current.x - (pinch.x - pinch.panX) * zoom / pinch.zoom;
@@ -879,21 +1008,34 @@
 					return;
 				}
 				const point = [...event.touches].find((point) => point.identifier === swipe?.id);
-				if (point && Math.hypot(point.clientX - swipe.x, point.clientY - swipe.y) > 10) swipe.moved = true;
+				if (point) movePress(point.clientX, point.clientY);
+				if (point && Math.hypot(point.clientX - swipe.x, point.clientY - swipe.y) > 10) {
+					swipe.moved = true;
+					cancelTap();
+				}
 				if (point && swipe.panning) {
-					event.preventDefault();
+					if (event.cancelable) event.preventDefault();
 					panX = swipe.panX + point.clientX - swipe.x;
 					panY = swipe.panY + point.clientY - swipe.y;
 					applyZoom();
 				}
 			}, { passive: false });
 			viewport.addEventListener("touchcancel", () => {
-				swipe = pinch = lastTap = null;
+				cancelPendingActions();
+				longPressConsumed = false;
+				swipe = pinch = null;
 				lastTouchAction = Date.now();
 			}, { passive: true });
 			viewport.addEventListener("touchend", (event) => {
+				cancelPress();
+				if (longPressConsumed) {
+					if (event.cancelable) event.preventDefault();
+					lastTouchAction = Date.now();
+					if (!event.touches.length) longPressConsumed = false;
+					return;
+				}
 				if (pinch) {
-					event.preventDefault();
+					if (event.cancelable) event.preventDefault();
 					lastTouchAction = Date.now();
 					if (!event.touches.length) pinch = null;
 					return;
@@ -905,43 +1047,43 @@
 				const dx = point.clientX - initial.x;
 				const dy = point.clientY - initial.y;
 				if (!initial.moved && Math.hypot(dx, dy) < 10 && Date.now() - initial.time < 800) {
-					event.preventDefault();
+					if (event.cancelable) event.preventDefault();
 					event.stopPropagation();
 					lastTouchAction = Date.now();
-					if (lastTap && Date.now() - lastTap.time < 320 && Math.hypot(point.clientX - lastTap.x, point.clientY - lastTap.y) < 30) {
+					if (initial.doubleTap) {
+						cancelTap();
 						resetZoom();
-						setControlsVisible(lastTap.controlsVisible);
-						lastTap = null;
 					} else {
+						cancelTap();
 						lastTap = {
 							time: Date.now(),
 							x: point.clientX,
-							y: point.clientY,
-							controlsVisible
+							y: point.clientY
 						};
-						setControlsVisible(!controlsVisible);
+						tapTimer = setTimeout(() => {
+							const tap = lastTap;
+							lastTap = null;
+							if (tap && !closed && !pageMenu) handleTap(tap.x);
+						}, 320);
 					}
 					return;
 				}
-				lastTap = null;
+				cancelTap();
 				if (initial.panning) {
-					event.preventDefault();
+					if (event.cancelable) event.preventDefault();
 					lastTouchAction = Date.now();
 					return;
 				}
 				if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-				event.preventDefault();
+				if (event.cancelable) event.preventDefault();
 				event.stopPropagation();
 				lastTouchAction = Date.now();
-				const delta = dx > 0 === rtl ? 1 : -1;
-				const starts = getStarts();
-				const position = starts.indexOf(start);
-				if (position + delta < 0 || position + delta >= starts.length) setControlsVisible(true);
-				else move(delta);
+				navigateGesture(dx > 0 === rtl ? 1 : -1);
 			}, { passive: false });
 			viewport.addEventListener("pointerdown", (event) => {
-				if (event.pointerType === "touch" || event.button !== 0 || zoom === 1 || event.target.closest("button")) return;
-				mousePan = {
+				if (event.pointerType === "touch" || event.button !== 0 || event.target.closest("button")) return;
+				armPress(event.target, event.clientX, event.clientY);
+				if (zoom > 1) mousePan = {
 					id: event.pointerId,
 					x: event.clientX,
 					y: event.clientY,
@@ -949,9 +1091,10 @@
 					panY,
 					moved: false
 				};
-				viewport.setPointerCapture(event.pointerId);
+				viewport.setPointerCapture?.(event.pointerId);
 			});
 			viewport.addEventListener("pointermove", (event) => {
+				if (event.pointerType !== "touch") movePress(event.clientX, event.clientY);
 				if (!mousePan || event.pointerId !== mousePan.id) return;
 				const dx = event.clientX - mousePan.x;
 				const dy = event.clientY - mousePan.y;
@@ -962,6 +1105,7 @@
 				spread.style.cursor = "grabbing";
 			});
 			const endMousePan = () => {
+				cancelPress();
 				if (mousePan?.moved) lastTouchAction = Date.now();
 				mousePan = null;
 				spread.style.cursor = zoom > 1 ? "grab" : "";
@@ -969,7 +1113,18 @@
 			viewport.addEventListener("pointerup", endMousePan);
 			viewport.addEventListener("pointercancel", endMousePan);
 			viewport.addEventListener("lostpointercapture", endMousePan);
+			viewport.addEventListener("contextmenu", (event) => {
+				if (event.target.closest("button")) return;
+				event.preventDefault();
+				if (Date.now() - lastTouchStart < 1500 || longPressConsumed) return;
+				openPageMenu(frameAt(event.target));
+			});
 			viewport.addEventListener("click", (event) => {
+				if (longPressConsumed) {
+					longPressConsumed = false;
+					lastTouchAction = Date.now();
+					return;
+				}
 				if (event.target.closest("button") || Date.now() - lastTouchAction < 800) return;
 				setControlsVisible(!controlsVisible);
 			});
@@ -978,9 +1133,22 @@
 				event.preventDefault();
 				resetZoom();
 			});
+			const consumePressRelease = (event) => {
+				if (!longPressConsumed || event.type === "pointerup" && event.pointerType === "touch") return;
+				if (event.cancelable) event.preventDefault();
+				event.stopImmediatePropagation();
+				lastTouchAction = Date.now();
+				if (!event.touches?.length) longPressConsumed = false;
+			};
+			dialog.addEventListener("touchend", consumePressRelease, {
+				capture: true,
+				passive: false
+			});
+			dialog.addEventListener("pointerup", consumePressRelease, true);
 			dialog.addEventListener("cancel", (event) => {
 				event.preventDefault();
-				close();
+				if (pageMenu) dismissPageMenu();
+				else close();
 			});
 			document.body.append(dialog);
 			try {
@@ -993,6 +1161,7 @@
 			htmlStyle.setProperty("overflow", "hidden");
 			addEventListener("keydown", keydown, true);
 			addEventListener("resize", resizeViewer);
+			addEventListener("blur", cancelPendingActions);
 			document.addEventListener("fullscreenchange", updateFullscreenButton);
 			document.addEventListener("load", sourceLoaded, true);
 			updateFullscreenButton();

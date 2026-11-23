@@ -69,6 +69,33 @@ function touch(h, node, type, x = 20, y = 20) {
   return e;
 }
 
+function gestureTimers(h) {
+  const nativeSet = h.w.setTimeout.bind(h.w);
+  const nativeClear = h.w.clearTimeout.bind(h.w);
+  const pending = new Map();
+  let id = -1;
+  h.w.setTimeout = (callback, delay, ...args) => {
+    if (![320, 550].includes(delay)) return nativeSet(callback, delay, ...args);
+    pending.set(id, { callback, delay });
+    return id--;
+  };
+  h.w.clearTimeout = timer => { if (!pending.delete(timer)) nativeClear(timer); };
+  return {
+    flush(delay) {
+      for (const [timer, task] of [...pending]) {
+        if (task.delay === delay && pending.delete(timer)) task.callback();
+      }
+    },
+    size: () => pending.size,
+  };
+}
+
+function pageSettings(h, page) {
+  const frame = h.viewer().querySelector(`[data-toki-page="${page}"]`);
+  frame.dispatchEvent(new h.w.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  return h.viewer().querySelector('[data-toki-page-popup]');
+}
+
 test('there is one viewer action and Android Firefox opens two fitted pages side by side', t => {
   const h = harness(t);
   assert.deepEqual([...h.d.querySelectorAll('button')].map(b => b.textContent), ['두 쪽 보기']);
@@ -797,6 +824,7 @@ test('controls overlay the full-height spread instead of reserving image height'
 
 test('toolbar auto-hides and a touch tap shows it without duplicate click toggling', t => {
   const h = harness(t);
+  const gestures = gestureTimers(h);
   const original = h.w.setTimeout.bind(h.w);
   let hide;
   h.w.setTimeout = (callback, delay, ...args) => {
@@ -811,6 +839,8 @@ test('toolbar auto-hides and a touch tap shows it without duplicate click toggli
   assert.equal(h.d.activeElement, spread, 'do not keep focus on a hidden control');
   touch(h, spread, 'touchstart');
   touch(h, spread, 'touchend');
+  assert.equal(toolbar.hidden, true, 'wait for the double-tap window');
+  gestures.flush(320);
   assert.equal(toolbar.hidden, false);
   spread.dispatchEvent(new h.w.MouseEvent('click', { bubbles: true, detail: 1 }));
   assert.equal(toolbar.hidden, false);
@@ -1002,46 +1032,188 @@ test('each visible image can override detection and that choice survives subsequ
   const h = harness(t);
   const images = trackImages(h);
   h.open();
+  pageSettings(h, 2);
   h.button('2쪽 단독 보기').click();
   assert.deepEqual(h.pages(), ['2']);
   assert.equal(h.viewer().querySelector('img').parentElement.style.width, '100%');
-  assert.equal(h.button('2쪽 두 쪽에 묶기').getAttribute('aria-pressed'), 'true');
   imageSize(images[1], 800, 1200);
   images[1].dispatchEvent(new h.w.Event('load'));
   assert.deepEqual(h.pages(), ['2'], 'a load must not erase a manual decision');
+  pageSettings(h, 2);
+  assert.equal(h.button('2쪽 두 쪽에 묶기').getAttribute('aria-pressed'), 'true');
   h.button('2쪽 두 쪽에 묶기').click();
   assert.deepEqual(h.pages(), ['1', '2']);
   imageSize(images[1], 1600, 1200);
   images[1].dispatchEvent(new h.w.Event('load'));
   assert.deepEqual(h.pages(), ['1', '2'], 'manual pairing can suppress a false positive');
+  pageSettings(h, 1);
   h.button('1쪽 단독 보기').click();
   assert.deepEqual(h.pages(), ['1']);
   h.button('다음 2쪽').click();
   assert.deepEqual(h.pages(), ['2', '3']);
 });
 
-test('page mode controls follow menu visibility, support touch, and release focus when hidden', t => {
+test('long press opens page settings without floating buttons or an accidental release activation', t => {
   const h = harness(t);
+  const timers = gestureTimers(h);
   h.open();
+  assert.equal(h.viewer().querySelector('[data-toki-page-mode]'), null);
+  assert.equal(h.button('1쪽 단독 보기'), undefined);
+  const frame = h.viewer().querySelector('[data-toki-page="1"]');
+  const image = frame.querySelector('img');
+  touch(h, image, 'touchstart');
+  timers.flush(550);
+  assert.ok(h.viewer().querySelector('[data-toki-page-popup]'));
+  assert.deepEqual(h.pages(), ['1', '2']);
   const mode = h.button('1쪽 단독 보기');
+  assert.equal(h.d.activeElement, mode);
+  assert.equal(touch(h, image, 'touchend').defaultPrevented, true);
+  image.dispatchEvent(new h.w.MouseEvent('click', { bubbles: true, detail: 1 }));
+  assert.ok(h.viewer().querySelector('[data-toki-page-popup]'));
   touch(h, mode, 'touchstart');
   touch(h, mode, 'touchend');
   assert.deepEqual(h.pages(), ['1']);
+  assert.equal(h.viewer().querySelector('[data-toki-page-popup]'), null);
   mode.dispatchEvent(new h.w.MouseEvent('click', { bubbles: true, detail: 1 }));
   assert.deepEqual(h.pages(), ['1'], 'synthetic click after tap must not toggle twice');
-  const spread = h.viewer().querySelector('[data-toki-spread]');
-  assert.equal(h.d.activeElement, mode);
-  spread.click();
-  assert.equal(mode.style.display, 'none');
-  assert.equal(h.d.activeElement, spread);
-  spread.click();
-  assert.equal(mode.style.display, 'inline-flex');
+  assert.equal(h.d.activeElement, frame);
+  timers.flush(320);
+  assert.deepEqual(h.pages(), ['1']);
+});
+
+test('movement, pinch, cancellation and close cancel pending long presses', t => {
+  const h = zoomHarness(t);
+  const timers = gestureTimers(h);
+  const image = h.viewer().querySelector('img');
+  touch(h, image, 'touchstart', 50, 100);
+  touch(h, image, 'touchmove', 100, 100);
+  timers.flush(550);
+  assert.equal(h.viewer().querySelector('[data-toki-page-popup]'), null);
+  touch(h, image, 'touchend', 150, 100);
+  assert.deepEqual(h.pages(), ['3', '4'], 'swipe still turns pages');
+  const current = h.viewer().querySelector('img');
+  touch(h, current, 'touchstart');
+  h.multiTouch('touchstart', [[1, 20, 20], [2, 200, 20]]);
+  timers.flush(550);
+  assert.equal(h.viewer().querySelector('[data-toki-page-popup]'), null);
+  h.multiTouch('touchend', []);
+  touch(h, current, 'touchstart');
+  touch(h, current, 'touchcancel');
+  timers.flush(550);
+  assert.equal(h.viewer().querySelector('[data-toki-page-popup]'), null);
+  touch(h, current, 'touchstart');
+  h.button('닫기').click();
+  timers.flush(550);
+  assert.equal(h.viewer(), null);
+  assert.equal(timers.size(), 0);
+});
+
+test('page popup supports keyboard focus, Escape and backdrop dismissal without navigating', t => {
+  const h = harness(t);
+  h.open();
+  const frame = h.viewer().querySelector('[data-toki-page="2"]');
+  frame.focus();
+  frame.dispatchEvent(new h.w.KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true }));
+  assert.equal(h.d.activeElement, h.button('2쪽 단독 보기'));
+  h.key('Tab');
+  assert.equal(h.d.activeElement, h.button('취소'));
+  h.key('j');
+  assert.deepEqual(h.pages(), ['1', '2']);
+  h.key('Escape');
+  assert.ok(h.viewer());
+  assert.equal(h.viewer().querySelector('[data-toki-page-popup]'), null);
+  assert.equal(h.d.activeElement, frame);
+  pageSettings(h, 2);
+  const backdrop = h.viewer().querySelector('[data-toki-popup-backdrop]');
+  touch(h, backdrop, 'touchstart');
+  touch(h, backdrop, 'touchend');
+  assert.equal(h.viewer().querySelector('[data-toki-page-popup]'), null);
+  assert.deepEqual(h.pages(), ['1', '2']);
+});
+
+test('mouse hold works at fit size and a source replacement dismisses a stale popup', async t => {
+  const h = harness(t);
+  const timers = gestureTimers(h);
+  h.open();
+  const image = h.viewer().querySelector('img');
+  const down = new h.w.MouseEvent('pointerdown', { bubbles: true, clientX: 40, clientY: 50, button: 0 });
+  Object.defineProperties(down, { pointerType: { value: 'mouse' }, pointerId: { value: 1 } });
+  image.dispatchEvent(down);
+  timers.flush(550);
+  const action = h.button('1쪽 단독 보기');
+  assert.ok(action);
+  putImage(h, 1, 'https://images.example/new-source.webp');
+  await settle();
+  assert.equal(h.viewer().querySelector('[data-toki-page-popup]'), null);
+  action.click();
+  assert.deepEqual(h.pages(), ['1', '2']);
+});
+
+for (const rtl of [true, false]) {
+  test(`40:20:40 touch zones respect direction and chapter boundaries (RTL: ${rtl})`, t => {
+    const h = zoomHarness(t);
+    const timers = gestureTimers(h);
+    if (!rtl) h.button('읽기: 우→좌').click();
+    const toolbar = h.viewer().querySelector('[data-toki-toolbar]');
+    const tap = x => {
+      touch(h, h.spread, 'touchstart', x, 200);
+      touch(h, h.spread, 'touchend', x, 200);
+      timers.flush(320);
+    };
+    tap(400);
+    assert.equal(toolbar.hidden, true);
+    tap(rtl ? 319 : 481);
+    assert.deepEqual(h.pages(), ['3', '4']);
+    assert.equal(toolbar.hidden, true);
+    tap(rtl ? 481 : 319);
+    assert.deepEqual(h.pages(), ['1', '2']);
+    tap(320);
+    assert.equal(toolbar.hidden, false, '40% boundary belongs to center');
+    tap(480);
+    assert.equal(toolbar.hidden, true, '60% boundary belongs to center');
+    tap(rtl ? 700 : 100);
+    assert.deepEqual(h.pages(), ['1', '2']);
+    assert.equal(toolbar.hidden, false, 'previous beyond the first spread shows menu');
+  });
+}
+
+test('double tap, pinch and long press consume side taps without an extra page turn', t => {
+  const h = zoomHarness(t);
+  const timers = gestureTimers(h);
+  const tap = () => {
+    touch(h, h.spread, 'touchstart', 100, 200);
+    touch(h, h.spread, 'touchend', 100, 200);
+  };
+  tap();
+  assert.deepEqual(h.pages(), ['1', '2'], 'side tap waits for a second tap');
+  tap();
+  timers.flush(320);
+  assert.deepEqual(h.pages(), ['1', '2'], 'double tap at 100% must not turn pages');
+  h.pinch();
+  tap();
+  timers.flush(320);
+  assert.deepEqual(h.pages(), ['1', '2'], 'side taps cannot turn pages while zoomed');
+  tap(); tap();
+  timers.flush(320);
+  assert.match(h.spread.style.transform, /scale\(1\)/);
+  tap();
+  h.pinch();
+  timers.flush(320);
+  assert.deepEqual(h.pages(), ['1', '2'], 'pinch cancels the pending tap');
+  const image = h.viewer().querySelector('img');
+  touch(h, image, 'touchstart', 100, 200);
+  timers.flush(550);
+  touch(h, image, 'touchend', 100, 200);
+  timers.flush(320);
+  assert.ok(h.viewer().querySelector('[data-toki-page-popup]'));
+  assert.deepEqual(h.pages(), ['1', '2']);
 });
 
 test('replaced image URLs do not inherit combined detection or manual choices', async t => {
   const h = harness(t);
   sourceSize(h, 1);
   h.open();
+  pageSettings(h, 1);
   h.button('1쪽 두 쪽에 묶기').click();
   assert.deepEqual(h.pages(), ['1', '2']);
   const source = putImage(h, 1, 'https://images.example/replacement.webp');

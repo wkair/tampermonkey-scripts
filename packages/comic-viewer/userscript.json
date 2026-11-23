@@ -1,7 +1,7 @@
 {
   "name": "토끼 뷰어 (새 테마 호환 수정본)",
   "description": "두 쪽 보기. i: 열기/닫기, j/k: 다음/이전 두 쪽.",
-  "version": "261123000005",
+  "version": "261123000006",
   "author": "nanikit (original), compatibility patch",
   "namespace": "https://greasyfork.org/ko/users/713014-nanikit",
   "match": [
