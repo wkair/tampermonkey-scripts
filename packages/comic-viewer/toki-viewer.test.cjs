@@ -125,6 +125,311 @@ test('optional cover offset pairs pages 2–3 instead of silently skipping page 
   assert.deepEqual(h.pages(), ['3', '4']);
 });
 
+test('cover sits on the left for RTL and right for LTR without reversing later pairs', t => {
+  const h = harness(t);
+  h.open();
+  h.button('첫 장 단독').click();
+  const spread = h.d.querySelector('[data-toki-spread]');
+  assert.equal(spread.style.flexDirection, 'row');
+  assert.equal(spread.querySelector('img').style.objectPosition, 'right center');
+  h.button('다음 2쪽').click();
+  assert.deepEqual(h.pages(), ['2', '3']);
+  assert.equal(spread.style.flexDirection, 'row-reverse');
+  h.button('이전 2쪽').click();
+  h.button('읽기: 우→좌').click();
+  assert.equal(spread.style.flexDirection, 'row-reverse');
+  assert.equal(spread.querySelector('img').style.objectPosition, 'left center');
+  h.button('다음 2쪽').click();
+  assert.deepEqual(h.pages(), ['2', '3']);
+  assert.equal(spread.style.flexDirection, 'row');
+});
+
+test('horizontal spare space stays outside while height overflow crops at the gutter in both directions', t => {
+  const h = harness(t);
+  h.open();
+  const images = [...h.viewer().querySelectorAll('img')];
+  for (const image of images) {
+    Object.defineProperties(image.parentElement, {
+      clientWidth: { configurable: true, value: 400 },
+      clientHeight: { configurable: true, value: 600 },
+    });
+    imageSize(image, 900, 900);
+  }
+  const check = (width, height, positions, edges) => {
+    assert.deepEqual([...h.viewer().querySelectorAll('img')], images);
+    for (const [index, image] of images.entries()) {
+      const edge = edges?.[index];
+      assert.equal(image.style.width, width);
+      assert.equal(image.style.height, height);
+      assert.equal(image.style.maxWidth, 'none');
+      assert.equal(image.style.maxHeight, 'none');
+      assert.equal(image.style.left, edge ? (edge === 'left' ? '0px' : 'auto') : '50%');
+      assert.equal(image.style.right, edge ? (edge === 'right' ? '0px' : 'auto') : '');
+      assert.equal(image.style.top, '50%');
+      assert.equal(image.style.transform, edge ? 'translateY(-50%)' : 'translate(-50%,-50%)');
+      assert.equal(image.style.objectPosition, `${positions[index]} center`);
+      assert.equal(image.parentElement.style.width, '50%');
+      assert.equal(image.parentElement.style.overflow, 'hidden');
+    }
+  };
+  check('100%', '100%', ['left', 'right']);
+  h.button('화면 맞춤').click();
+  check('auto', '100%', ['right', 'left'], ['right', 'left']);
+  h.button('읽기: 우→좌').click();
+  check('auto', '100%', ['left', 'right'], ['left', 'right']);
+  for (const image of images) {
+    imageSize(image, 300, 900);
+    image.dispatchEvent(new h.w.Event('load'));
+  }
+  check('auto', '100%', ['right', 'left'], ['right', 'left']);
+  h.button('읽기: 좌→우').click();
+  check('auto', '100%', ['left', 'right'], ['left', 'right']);
+  // Rotation can turn a narrow page into an overflowing one without a new load.
+  for (const image of images) Object.defineProperty(image.parentElement, 'clientWidth', { configurable: true, value: 150 });
+  h.w.dispatchEvent(new h.w.Event('resize'));
+  check('auto', '100%', ['right', 'left'], ['right', 'left']);
+  h.button('높이 맞춤').click();
+  check('100%', 'auto', ['left', 'right']);
+  h.button('폭 맞춤').click();
+  check('100%', '100%', ['left', 'right']);
+});
+
+for (const mode of ['contain', 'height', 'width']) {
+  test(`fit ${mode} and reading direction persist after reopening and a fresh page`, t => {
+    const h = harness(t);
+    h.open();
+    h.button('화면 맞춤').click();
+    if (mode !== 'height') h.button('높이 맞춤').click();
+    if (mode === 'contain') h.button('폭 맞춤').click();
+    h.button('읽기: 우→좌').click();
+    const storage = Object.fromEntries(Object.entries(h.w.localStorage));
+    assert.equal(storage['toki-viewer.image-fit'], mode);
+    assert.equal(storage['toki-viewer.reading-direction'], 'ltr');
+    h.button('닫기').click();
+    h.open();
+    assert.equal(h.viewer().querySelector('[data-toki-fit]').dataset.tokiFit, mode);
+    assert.ok(h.button('읽기: 좌→우'));
+    const fresh = harness(t, { storage });
+    fresh.open();
+    assert.equal(fresh.viewer().querySelector('[data-toki-fit]').dataset.tokiFit, mode);
+    assert.ok(fresh.button('읽기: 좌→우'));
+    fresh.button('읽기: 좌→우').click();
+    assert.equal(fresh.w.localStorage.getItem('toki-viewer.reading-direction'), 'rtl');
+  });
+}
+
+test('fit, direction and cover preferences carry into the automatically opened next chapter', async t => {
+  const h = harness(t);
+  const next = episodeLink(h, 'next', B);
+  next.addEventListener('click', event => { event.preventDefault(); h.navigate(B); });
+  h.open();
+  h.button('화면 맞춤').click();
+  h.button('높이 맞춤').click();
+  h.button('읽기: 우→좌').click();
+  h.button('첫 장 단독').click();
+  h.button('다음화').click();
+  setScope(h, B);
+  for (let page = 1; page <= 6; page++) putImage(h, page, `https://images.example/next${page}.webp`);
+  await settle();
+  assert.ok(h.button('폭 맞춤'));
+  assert.ok(h.button('읽기: 좌→우'));
+  assert.deepEqual(h.pages(), ['1']);
+  assert.equal(h.viewer().querySelector('img').style.height, 'auto');
+  assert.equal(h.viewer().querySelector('[data-toki-spread]').style.flexDirection, 'row-reverse');
+});
+
+test('blocked storage preserves fit and direction during reopening and invalid values use defaults', t => {
+  const h = harness(t, { storageBlocked: true });
+  h.open();
+  h.button('화면 맞춤').click();
+  h.button('읽기: 우→좌').click();
+  h.button('닫기').click();
+  h.open();
+  assert.ok(h.button('높이 맞춤'));
+  assert.ok(h.button('읽기: 좌→우'));
+  assert.deepEqual(h.errors, []);
+  const invalid = harness(t, { storage: { 'toki-viewer.image-fit': 'invalid', 'toki-viewer.reading-direction': 'invalid' } });
+  invalid.open();
+  assert.ok(invalid.button('화면 맞춤'));
+  assert.ok(invalid.button('읽기: 우→좌'));
+});
+
+test('fit works with cover, combined pages, cached next pages and image retries', t => {
+  const h = harness(t);
+  sourceSize(h, 2);
+  h.open();
+  h.button('화면 맞춤').click();
+  h.button('첫 장 단독').click();
+  const cover = h.viewer().querySelector('img');
+  Object.defineProperties(cover.parentElement, { clientWidth: { value: 400 }, clientHeight: { value: 600 } });
+  imageSize(cover, 900, 900);
+  cover.dispatchEvent(new h.w.Event('load'));
+  assert.equal(cover.style.left, '0px');
+  assert.equal(cover.style.objectPosition, 'left center');
+  assert.equal(cover.parentElement.style.width, '50%');
+  h.button('읽기: 우→좌').click();
+  assert.equal(cover.style.right, '0px');
+  assert.equal(cover.style.objectPosition, 'right center');
+  h.button('읽기: 좌→우').click();
+  h.button('다음 2쪽').click();
+  const combined = h.viewer().querySelector('img');
+  assert.equal(combined.parentElement.style.width, '100%');
+  assert.equal(combined.style.width, 'auto');
+  assert.equal(combined.style.height, '100%');
+  assert.equal(combined.style.objectPosition, 'center');
+  assert.equal(combined.style.left, '50%');
+  h.button('다음 2쪽').click();
+  for (const image of h.viewer().querySelectorAll('img')) assert.equal(image.style.width, 'auto');
+  h.viewer().querySelector('img').dispatchEvent(new h.w.Event('error'));
+  h.button('다시 시도').click();
+  const retried = h.viewer().querySelector('img');
+  imageSize(retried, 900, 900);
+  retried.dispatchEvent(new h.w.Event('load'));
+  assert.equal(retried.style.width, 'auto');
+  assert.equal(retried.style.objectPosition, 'right center');
+  assert.equal(retried.style.right, '0px');
+});
+
+test('switching fit resets pinch and double tap restores the selected fit without erasing preference', t => {
+  const h = zoomHarness(t);
+  h.pinch();
+  h.button('화면 맞춤').click();
+  assert.equal(h.spread.style.transform, 'translate(0px, 0px) scale(1)');
+  h.pinch();
+  assert.match(h.spread.style.transform, /scale\(2\)/);
+  for (let i = 0; i < 2; i++) {
+    touch(h, h.spread, 'touchstart', 200, 200);
+    touch(h, h.spread, 'touchend', 200, 200);
+  }
+  assert.equal(h.spread.style.transform, 'translate(0px, 0px) scale(1)');
+  assert.ok(h.button('높이 맞춤'));
+  assert.equal(h.w.localStorage.getItem('toki-viewer.image-fit'), 'height');
+  assert.equal(h.spread.querySelector('img').style.width, 'auto');
+});
+
+function zoomHarness(t) {
+  const h = harness(t);
+  h.open();
+  h.viewport = h.d.querySelector('[data-toki-viewport]');
+  h.spread = h.d.querySelector('[data-toki-spread]');
+  h.viewport.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600 });
+  h.multiTouch = (type, points, changed = points) => {
+    const list = values => values.map(([identifier, clientX, clientY]) => ({ identifier, clientX, clientY }));
+    const event = new h.w.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperties(event, { touches: { value: list(points) }, changedTouches: { value: list(changed) } });
+    h.spread.dispatchEvent(event);
+    return event;
+  };
+  h.pinch = (distance = 200) => {
+    h.multiTouch('touchstart', [[1, 350, 300], [2, 450, 300]]);
+    h.multiTouch('touchmove', [[1, 400 - distance / 2, 300], [2, 400 + distance / 2, 300]]);
+    h.multiTouch('touchend', [], [[1, 400 - distance / 2, 300], [2, 400 + distance / 2, 300]]);
+  };
+  return h;
+}
+
+test('pinch zoom is continuous, clamped, and reuses images without adding zoom buttons', t => {
+  const h = zoomHarness(t);
+  const images = [...h.spread.querySelectorAll('img')];
+  const buttons = [...h.viewer().querySelectorAll('button')].map(button => button.textContent);
+  h.pinch(175);
+  assert.equal(h.spread.style.transform, 'translate(0px, 0px) scale(1.75)');
+  h.pinch(400);
+  assert.equal(h.spread.style.transform, 'translate(0px, 0px) scale(4)');
+  h.pinch(10);
+  assert.equal(h.spread.style.transform, 'translate(0px, 0px) scale(1)');
+  assert.deepEqual([...h.spread.querySelectorAll('img')], images);
+  assert.deepEqual([...h.viewer().querySelectorAll('button')].map(button => button.textContent), buttons);
+  assert.equal(h.button('확대'), undefined);
+  assert.equal(h.button('축소'), undefined);
+});
+
+test('pinch anchors the touched content and consumes the remaining finger without turning pages', t => {
+  const h = zoomHarness(t);
+  h.multiTouch('touchstart', [[1, 150, 200], [2, 250, 200]]);
+  assert.equal(h.multiTouch('touchmove', [[1, 100, 200], [2, 300, 200]]).defaultPrevented, true);
+  assert.equal(h.spread.style.transform, 'translate(200px, 100px) scale(2)');
+  h.multiTouch('touchend', [[1, 100, 200]], [[2, 300, 200]]);
+  h.multiTouch('touchmove', [[1, 500, 200]]);
+  h.multiTouch('touchend', [], [[1, 500, 200]]);
+  assert.deepEqual(h.pages(), ['1', '2']);
+  assert.equal(h.spread.style.transform, 'translate(200px, 100px) scale(2)');
+});
+
+test('zoomed dragging pans within bounds, suppresses clicks, and double tap restores fit', t => {
+  const h = zoomHarness(t);
+  h.pinch();
+  const toolbar = h.viewer().querySelector('[data-toki-toolbar]');
+  touch(h, h.spread, 'touchstart', 100, 100);
+  touch(h, h.spread, 'touchmove', 1000, 1000);
+  touch(h, h.spread, 'touchend', 1000, 1000);
+  assert.equal(h.spread.style.transform, 'translate(400px, 300px) scale(2)');
+  assert.deepEqual(h.pages(), ['1', '2']);
+  h.spread.click();
+  assert.equal(toolbar.hidden, false);
+  for (let i = 0; i < 2; i++) {
+    touch(h, h.spread, 'touchstart', 200, 200);
+    touch(h, h.spread, 'touchend', 200, 200);
+  }
+  assert.equal(h.spread.style.transform, 'translate(0px, 0px) scale(1)');
+  assert.equal(toolbar.hidden, false);
+  touch(h, h.spread, 'touchstart', 50, 100);
+  touch(h, h.spread, 'touchend', 150, 100);
+  assert.deepEqual(h.pages(), ['3', '4']);
+});
+
+test('two distant taps do not reset zoom and cancellation cannot become a page swipe', t => {
+  const h = zoomHarness(t);
+  h.pinch();
+  for (const x of [100, 400]) {
+    touch(h, h.spread, 'touchstart', x, 200);
+    touch(h, h.spread, 'touchend', x, 200);
+  }
+  assert.match(h.spread.style.transform, /scale\(2\)/);
+  h.multiTouch('touchstart', [[1, 150, 200], [2, 250, 200]]);
+  h.multiTouch('touchcancel', []);
+  touch(h, h.spread, 'touchend', 700, 200);
+  assert.deepEqual(h.pages(), ['1', '2']);
+  assert.match(h.spread.style.transform, /scale\(2\)/);
+});
+
+test('page changes reset zoom but an unchanged source refresh preserves it', async t => {
+  const h = zoomHarness(t);
+  h.pinch();
+  h.d.querySelector('[data-theme-page="1"] img').dispatchEvent(new h.w.Event('load'));
+  await settle();
+  assert.match(h.spread.style.transform, /scale\(2\)/);
+  h.button('다음 2쪽').click();
+  assert.deepEqual(h.pages(), ['3', '4']);
+  assert.equal(h.spread.style.transform, 'translate(0px, 0px) scale(1)');
+  h.pinch();
+  h.button('읽기: 우→좌').click();
+  assert.equal(h.spread.style.transform, 'translate(0px, 0px) scale(1)');
+});
+
+test('mouse drag and arrow keys pan zoomed content, resize clamps pan, double click resets', t => {
+  const h = zoomHarness(t);
+  h.pinch();
+  h.viewport.setPointerCapture = () => {};
+  const pointer = (type, x, y) => {
+    const event = new h.w.MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
+    Object.defineProperties(event, { pointerType: { value: 'mouse' }, pointerId: { value: 1 } });
+    h.spread.dispatchEvent(event);
+  };
+  pointer('pointerdown', 100, 100);
+  pointer('pointermove', 400, 300);
+  pointer('pointerup', 400, 300);
+  assert.equal(h.spread.style.transform, 'translate(300px, 200px) scale(2)');
+  h.key('ArrowLeft');
+  assert.equal(h.spread.style.transform, 'translate(380px, 200px) scale(2)');
+  assert.deepEqual(h.pages(), ['1', '2']);
+  h.viewport.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 300 });
+  h.w.dispatchEvent(new h.w.Event('resize'));
+  assert.equal(h.spread.style.transform, 'translate(200px, 150px) scale(2)');
+  h.spread.dispatchEvent(new h.w.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  assert.equal(h.spread.style.transform, 'translate(0px, 0px) scale(1)');
+});
+
 test('cover preference keeps both on and off choices after closing and reopening', t => {
   const h = harness(t);
   h.open();

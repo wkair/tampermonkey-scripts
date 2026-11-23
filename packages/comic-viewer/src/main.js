@@ -1,12 +1,27 @@
 "use strict";
 
 (() => {
-  const VERSION = "261105000003";
+  const VERSION = "261123000005";
   const SPREAD_RATIO = 1.2;
   const RESUME_KEY = "toki-viewer.resume-episode";
   const COVER_KEY = "toki-viewer.first-page-alone";
+  const FIT_KEY = "toki-viewer.image-fit";
+  const DIRECTION_KEY = "toki-viewer.reading-direction";
+  const FIT_MODES = [
+    { value: "contain", label: "화면 맞춤" },
+    { value: "height", label: "높이 맞춤" },
+    { value: "width", label: "폭 맞춤" },
+  ];
   let coverPreference = false;
-  try { coverPreference = localStorage.getItem(COVER_KEY) === "true"; }
+  let fitPreference = "contain";
+  let directionPreference = null;
+  try {
+    coverPreference = localStorage.getItem(COVER_KEY) === "true";
+    const fit = localStorage.getItem(FIT_KEY);
+    if (FIT_MODES.some((mode) => mode.value === fit)) fitPreference = fit;
+    const direction = localStorage.getItem(DIRECTION_KEY);
+    if (direction === "rtl" || direction === "ltr") directionPreference = direction;
+  }
   catch (_) { /* Keep the session preference when browser storage is blocked. */ }
   const layouts = [
     { root: "[data-theme-viewer-images], .theme-viewer-images", theme: true },
@@ -246,12 +261,18 @@
     let snapshot = initial;
     let start = 0;
     let cover = coverPreference;
-    let rtl = getOrigin() === "manatoki" || /^\/manhwa(?:-end)?\//.test(location.pathname);
+    let fit = fitPreference;
+    let rtl = directionPreference ? directionPreference === "rtl"
+      : getOrigin() === "manatoki" || /^\/manhwa(?:-end)?\//.test(location.pathname);
     let closed = false;
     let ownsFullscreen = false;
     let fullscreenPending = false;
     let controlsVisible = true;
     let controlsTimer;
+    let zoom = 1;
+    let panX = 0;
+    let panY = 0;
+    let viewKey = "";
     const imageCache = new Map();
     // Keep only small classification values after image objects are evicted.
     // URL-based keys prevent a replaced source from inheriting an old decision.
@@ -270,7 +291,12 @@
     toolbar.dataset.tokiToolbar = "";
     toolbar.setAttribute("role", "toolbar");
     toolbar.setAttribute("aria-label", "두 쪽 보기 조작 메뉴");
-    toolbar.style.cssText = "position:absolute;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:2;box-sizing:border-box;width:max-content;max-width:calc(100% - 24px);display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px;padding:7px;border:1px solid #ffffff24;border-radius:22px;background:rgba(20,24,32,.9);backdrop-filter:blur(20px);box-shadow:0 8px 32px #0006,0 1px 0 #ffffff0d inset";
+    toolbar.style.cssText = "position:absolute;left:50%;bottom:calc(max(6px,env(safe-area-inset-bottom)) + 26px);transform:translateX(-50%);z-index:2;box-sizing:border-box;width:max-content;max-width:calc(100% - 24px);display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px;padding:7px;border:1px solid #ffffff24;border-radius:22px;background:rgba(20,24,32,.9);backdrop-filter:blur(20px);box-shadow:0 8px 32px #0006,0 1px 0 #ffffff0d inset";
+    const versionLabel = document.createElement("div");
+    versionLabel.dataset.tokiVersion = "";
+    versionLabel.textContent = `v${VERSION}`;
+    versionLabel.setAttribute("aria-label", `뷰어 버전 ${VERSION}`);
+    versionLabel.style.cssText = "position:absolute;right:max(12px,env(safe-area-inset-right));bottom:max(6px,env(safe-area-inset-bottom));z-index:2;padding:2px 6px;border-radius:5px;background:rgba(20,24,32,.85);color:#c7ced9;font:12px/1.4 system-ui,sans-serif;font-variant-numeric:tabular-nums;white-space:nowrap;pointer-events:none;user-select:none";
     const menuStyle = document.createElement("style");
     menuStyle.textContent = "[data-toki-toolbar] button:disabled{opacity:.28;cursor:default}[data-toki-toolbar] button:focus-visible{outline:2px solid #a8caff;outline-offset:1px}@media(hover:hover){[data-toki-toolbar] button:not(:disabled):hover{background:#ffffff18!important}}";
     const count = document.createElement("span");
@@ -279,7 +305,7 @@
     count.style.cssText = "min-width:98px;text-align:center;color:#f0f3fa;font:500 14px/1.4 system-ui,sans-serif;font-variant-numeric:tabular-nums;letter-spacing:.3px;white-space:nowrap";
     const notice = document.createElement("div");
     notice.setAttribute("role", "status");
-    notice.style.cssText = "position:absolute;inset:auto 0 0;z-index:3;max-height:30%;overflow:auto;background:#222e;color:#ffcece;text-align:center";
+    notice.style.cssText = "position:absolute;inset:0 0 auto;z-index:3;max-height:30%;overflow:auto;background:#222e;color:#ffcece;text-align:center";
     const report = (error) => {
       notice.textContent = `실행 오류: ${error?.message || String(error)}`;
       console.error("[토끼 뷰어]", error);
@@ -288,7 +314,23 @@
     const next = makeButton("다음 2쪽", () => move(1), report);
     const previousEpisode = makeButton("이전화", () => changeEpisode("previous"), report);
     const nextEpisode = makeButton("다음화", () => changeEpisode("next"), report);
-    const direction = makeButton("", () => { rtl = !rtl; draw(); }, report);
+    const direction = makeButton("", () => {
+      rtl = !rtl;
+      directionPreference = rtl ? "rtl" : "ltr";
+      try { localStorage.setItem(DIRECTION_KEY, directionPreference); }
+      catch (_) { /* Keep the session preference when storage is blocked. */ }
+      draw();
+    }, report);
+    const fitButton = makeButton("", () => {
+      const index = FIT_MODES.findIndex((mode) => mode.value === fit);
+      fit = FIT_MODES[(index + 1) % FIT_MODES.length].value;
+      fitPreference = fit;
+      try { localStorage.setItem(FIT_KEY, fit); }
+      catch (_) { /* Keep the session preference when storage is blocked. */ }
+      draw();
+    }, report);
+    fitButton.dataset.tokiFit = "";
+    fitButton.style.cssText = "flex:none;height:44px;min-height:44px;min-width:80px;padding:0 8px;border:1px solid #ffffff24;border-radius:12px;background:#ffffff0d;color:#e5eaf3;font:500 13px system-ui,sans-serif;white-space:nowrap;touch-action:manipulation;cursor:pointer";
     const pairing = makeButton("첫 장 단독", () => {
       cover = !cover;
       coverPreference = cover;
@@ -304,8 +346,8 @@
     pager.style.cssText = "display:flex;align-items:center;gap:0";
     pager.append(previousEpisode, previous, count, next, nextEpisode);
     const tools = document.createElement("div");
-    tools.style.cssText = "display:flex;align-items:center;gap:2px;padding-left:5px;border-left:1px solid #ffffff1c";
-    tools.append(direction, pairing, fullscreenButton, closeButton);
+    tools.style.cssText = "display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:2px;max-width:100%";
+    tools.append(fitButton, direction, pairing, fullscreenButton, closeButton);
     toolbar.append(pager, tools);
     setToolIcon(closeButton, "닫기", "close");
 
@@ -356,10 +398,36 @@
         updateFullscreenButton();
       });
     }
+    const viewport = document.createElement("div");
+    viewport.dataset.tokiViewport = "";
+    viewport.style.cssText = "position:absolute;inset:0;overflow:hidden;touch-action:none";
     const spread = document.createElement("div");
     spread.dataset.tokiSpread = "";
     spread.tabIndex = -1;
-    spread.style.cssText = "position:absolute;inset:0;display:flex;width:100%;height:100%;min-height:0;min-width:0;overflow:hidden;touch-action:pan-y pinch-zoom";
+    spread.style.cssText = "position:absolute;inset:0;display:flex;width:100%;height:100%;min-height:0;min-width:0;overflow:hidden;transform-origin:center;touch-action:none";
+
+    function applyZoom() {
+      const bounds = viewport.getBoundingClientRect();
+      const limitX = bounds.width * (zoom - 1) / 2;
+      const limitY = bounds.height * (zoom - 1) / 2;
+      panX = Math.max(-limitX, Math.min(limitX, panX));
+      panY = Math.max(-limitY, Math.min(limitY, panY));
+      spread.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+      spread.style.cursor = zoom > 1 ? "grab" : "";
+      if (zoom > 1 && frames.some((frame) => frame.mode === document.activeElement)) spread.focus({ preventScroll: true });
+      for (const frame of frames) frame.mode.style.display = controlsVisible && zoom === 1 && frame.entry ? "inline-flex" : "none";
+    }
+
+    function resetZoom() {
+      zoom = 1;
+      panX = panY = 0;
+      applyZoom();
+    }
+
+    function resizeViewer() {
+      for (const frame of frames) if (frame.image) styleImage(frame.image, frame);
+      applyZoom();
+    }
 
     function setControlsVisible(visible) {
       if (closed) return;
@@ -369,7 +437,9 @@
       toolbar.hidden = !visible;
       toolbar.inert = !visible;
       toolbar.style.display = visible ? "flex" : "none";
-      for (const frame of frames) frame.mode.style.display = visible && frame.entry ? "inline-flex" : "none";
+      versionLabel.hidden = !visible;
+      versionLabel.style.display = visible ? "block" : "none";
+      for (const frame of frames) frame.mode.style.display = visible && zoom === 1 && frame.entry ? "inline-flex" : "none";
       if (visible) controlsTimer = setTimeout(() => setControlsVisible(false), 3000);
     }
     toolbar.addEventListener("touchstart", () => setControlsVisible(true), { passive: true });
@@ -379,7 +449,7 @@
       const element = document.createElement("section");
       element.dataset.tokiPage = "";
       // Normal pages use half the width; combined/manual single images use all
-      // of it. Neither layout crops or stacks the original images.
+      // of it. Clip each image to its own cell in every fit mode.
       element.style.cssText = "position:relative;flex:0 0 50%;width:50%;height:100%;min-width:0;min-height:0;overflow:hidden;box-sizing:border-box";
       const message = document.createElement("div");
       message.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:8px;text-align:center;box-sizing:border-box;color:white";
@@ -404,7 +474,8 @@
       spread.append(element);
       return frame;
     });
-    dialog.append(menuStyle, toolbar, notice, spread);
+    viewport.append(spread);
+    dialog.append(menuStyle, toolbar, versionLabel, notice, viewport);
 
     function imageKey(entry) {
       return entry?.page?.src ? JSON.stringify([entry.key, entry.page.src, entry.page.referrerPolicy]) : null;
@@ -503,6 +574,28 @@
       }
     }
 
+    function styleImage(image, frame) {
+      image.style.cssText = "display:block;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:100%;height:100%;min-width:0;min-height:0;max-width:none;max-height:none;object-fit:contain;object-position:center;user-select:none";
+      const paired = frame.element.style.width !== "100%";
+      const onLeft = (frames.indexOf(frame) === 0) !== (spread.style.flexDirection === "row-reverse");
+      // Keep horizontal spare space outside the pair, never at the gutter.
+      if (paired) image.style.objectPosition = onLeft ? "right center" : "left center";
+      if (fit === "height") {
+        image.style.width = "auto";
+        if (paired) {
+          const overflows = image.naturalHeight > 0 &&
+            image.naturalWidth / image.naturalHeight * frame.element.clientHeight > frame.element.clientWidth;
+          // Narrow pages meet at the gutter; wide pages preserve their outer edge.
+          const anchorLeft = overflows ? onLeft : !onLeft;
+          image.style.left = anchorLeft ? "0" : "auto";
+          image.style.right = anchorLeft ? "auto" : "0";
+          image.style.transform = "translateY(-50%)";
+          image.style.objectPosition = anchorLeft ? "left center" : "right center";
+        }
+      }
+      if (fit === "width") image.style.height = "auto";
+    }
+
     function loadFrame(frame, entry, force = false) {
       const src = entry?.page?.src || null;
       if (!force && frame.initialized && frame.entry?.key === entry?.key && frame.src === src) {
@@ -530,11 +623,11 @@
       const record = cachedImage(entry, false, force || old?.status === "error");
       const image = record.image;
       frame.image = image;
-      image.style.cssText = "display:block;position:absolute;inset:0;width:100%;height:100%;max-width:none;max-height:none;object-fit:contain;user-select:none";
-      image.style.objectPosition = (frames.indexOf(frame) === 0) === rtl ? "left center" : "right center";
+      styleImage(image, frame);
       image.draggable = false;
       const update = () => {
         if (closed || frame.image !== image) return;
+        styleImage(image, frame);
         frame.message.style.display = record.status === "complete" ? "none" : "flex";
         frame.retry.hidden = record.status !== "error";
         if (record.status === "error") frame.text.textContent = `${entry.key}쪽을 불러오지 못했습니다.`;
@@ -554,6 +647,16 @@
       if (!starts.includes(start)) start = [...starts].reverse().find((index) => index <= start) ?? 0;
       const pages = pagesAt(entries, starts, start);
       const fullWidth = pages.length === 1 && isSingle(pages[0]);
+      // A front cover sits on the trailing side of the first spread.
+      const coverSpread = cover && start === 0 && pages.length === 1 && !fullWidth;
+      const displayRtl = coverSpread ? !rtl : rtl;
+      const nextViewKey = JSON.stringify([pages.map((entry) => [entry.key, entry.page?.src]), fullWidth, displayRtl, fit]);
+      if (viewKey !== nextViewKey) {
+        viewKey = nextViewKey;
+        zoom = 1;
+        panX = panY = 0;
+        swipe = pinch = mousePan = lastTap = null;
+      }
       count.textContent = pages.length ? `${start + 1}${pages.length > 1 ? `–${start + pages.length}` : ""} / ${entries.length}` : "이미지 준비 중";
       previous.disabled = start === 0;
       next.disabled = !starts.length || start === starts.at(-1);
@@ -566,14 +669,19 @@
       setToolIcon(nextEpisode, "다음화", rtl ? "episodeLeft" : "episodeRight");
       setToolIcon(direction, rtl ? "읽기: 우→좌" : "읽기: 좌→우", rtl ? "rtl" : "ltr");
       setToolIcon(pairing, "첫 장 단독", "cover");
+      const fitIndex = FIT_MODES.findIndex((mode) => mode.value === fit);
+      fitButton.textContent = FIT_MODES[fitIndex].label;
+      fitButton.setAttribute("aria-label", FIT_MODES[fitIndex].label);
+      fitButton.title = `${FIT_MODES[fitIndex].label} · 누르면 ${FIT_MODES[(fitIndex + 1) % FIT_MODES.length].label}`;
+      fitButton.dataset.tokiFit = fit;
       pager.style.flexDirection = rtl ? "row-reverse" : "row";
-      spread.style.flexDirection = rtl ? "row-reverse" : "row";
+      spread.style.flexDirection = displayRtl ? "row-reverse" : "row";
       frames.forEach((frame, index) => {
         frame.element.style.flexBasis = fullWidth ? "100%" : "50%";
         frame.element.style.width = fullWidth ? "100%" : "50%";
         frame.element.style.display = fullWidth && index === 1 ? "none" : "block";
         loadFrame(frame, pages[index]);
-        if (frame.image) frame.image.style.objectPosition = fullWidth ? "center" : (index === 0) === rtl ? "left center" : "right center";
+        if (frame.image) styleImage(frame.image, frame);
         const single = isSingle(frame.entry);
         frame.mode.disabled = !frame.entry?.page;
         frame.mode.setAttribute("aria-pressed", String(single));
@@ -584,6 +692,7 @@
           display: controlsVisible && frame.entry ? "inline-flex" : "none",
         });
       });
+      applyZoom();
       preloadNext(entries, starts);
     }
 
@@ -625,6 +734,7 @@
         if (overflow) htmlStyle.setProperty("overflow", overflow, overflowPriority);
         else htmlStyle.removeProperty("overflow");
         removeEventListener("keydown", keydown, true);
+        removeEventListener("resize", resizeViewer);
         document.removeEventListener("fullscreenchange", updateFullscreenButton);
         document.removeEventListener("load", sourceLoaded, true);
         if (focusBefore?.isConnected) focusBefore.focus?.({ preventScroll: true });
@@ -643,6 +753,13 @@
       if (key === "arrowright") action = () => move(rtl ? -1 : 1);
       if (key === "l") action = () => changeEpisode("next");
       if (key === "h") action = () => changeEpisode("previous");
+      if (zoom > 1 && key.startsWith("arrow")) action = () => {
+        if (key === "arrowleft") panX += 80;
+        if (key === "arrowright") panX -= 80;
+        if (key === "arrowup") panY += 80;
+        if (key === "arrowdown") panY -= 80;
+        applyZoom();
+      };
       if (!action) return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -650,17 +767,60 @@
     }
 
     let swipe = null;
+    let pinch = null;
+    let mousePan = null;
+    let lastTap = null;
     let lastTouchAction = -Infinity;
-    spread.addEventListener("touchstart", (event) => {
-      const point = event.touches.length === 1 && !event.target.closest("button") ? event.touches[0] : null;
-      swipe = point ? { id: point.identifier, x: point.clientX, y: point.clientY, time: Date.now(), moved: false } : null;
-    }, { passive: true });
-    spread.addEventListener("touchmove", (event) => {
+    function touchGeometry(touches) {
+      const [a, b] = touches;
+      const bounds = viewport.getBoundingClientRect();
+      return {
+        distance: Math.max(1, Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY)),
+        x: (a.clientX + b.clientX) / 2 - bounds.left - bounds.width / 2,
+        y: (a.clientY + b.clientY) / 2 - bounds.top - bounds.height / 2,
+      };
+    }
+    viewport.addEventListener("touchstart", (event) => {
+      if (event.target.closest("button")) return;
+      if (event.touches.length >= 2) {
+        event.preventDefault();
+        pinch = { ...touchGeometry(event.touches), zoom, panX, panY };
+        swipe = null;
+        lastTap = null;
+        lastTouchAction = Date.now();
+        return;
+      }
+      const point = event.touches.length === 1 ? event.touches[0] : null;
+      swipe = point ? { id: point.identifier, x: point.clientX, y: point.clientY, time: Date.now(), moved: false, panX, panY, panning: zoom > 1 } : null;
+    }, { passive: false });
+    viewport.addEventListener("touchmove", (event) => {
+      if (pinch && event.touches.length >= 2) {
+        event.preventDefault();
+        const current = touchGeometry(event.touches);
+        zoom = Math.max(1, Math.min(4, pinch.zoom * current.distance / pinch.distance));
+        panX = current.x - (pinch.x - pinch.panX) * zoom / pinch.zoom;
+        panY = current.y - (pinch.y - pinch.panY) * zoom / pinch.zoom;
+        applyZoom();
+        return;
+      }
       const point = [...event.touches].find((point) => point.identifier === swipe?.id);
       if (point && Math.hypot(point.clientX - swipe.x, point.clientY - swipe.y) > 10) swipe.moved = true;
-    }, { passive: true });
-    spread.addEventListener("touchcancel", () => { swipe = null; }, { passive: true });
-    spread.addEventListener("touchend", (event) => {
+      if (point && swipe.panning) {
+        event.preventDefault();
+        panX = swipe.panX + point.clientX - swipe.x;
+        panY = swipe.panY + point.clientY - swipe.y;
+        applyZoom();
+      }
+    }, { passive: false });
+    viewport.addEventListener("touchcancel", () => { swipe = pinch = lastTap = null; lastTouchAction = Date.now(); }, { passive: true });
+    viewport.addEventListener("touchend", (event) => {
+      if (pinch) {
+        event.preventDefault();
+        lastTouchAction = Date.now();
+        // Consume the entire two-finger gesture, including its remaining finger.
+        if (!event.touches.length) pinch = null;
+        return;
+      }
       const initial = swipe;
       swipe = null;
       const point = [...event.changedTouches].find((point) => point.identifier === initial?.id);
@@ -671,7 +831,20 @@
         event.preventDefault();
         event.stopPropagation();
         lastTouchAction = Date.now();
-        setControlsVisible(!controlsVisible);
+        if (lastTap && Date.now() - lastTap.time < 320 && Math.hypot(point.clientX - lastTap.x, point.clientY - lastTap.y) < 30) {
+          resetZoom();
+          setControlsVisible(lastTap.controlsVisible);
+          lastTap = null;
+        } else {
+          lastTap = { time: Date.now(), x: point.clientX, y: point.clientY, controlsVisible };
+          setControlsVisible(!controlsVisible);
+        }
+        return;
+      }
+      lastTap = null;
+      if (initial.panning) {
+        event.preventDefault();
+        lastTouchAction = Date.now();
         return;
       }
       if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
@@ -685,9 +858,37 @@
         setControlsVisible(true);
       } else move(delta);
     }, { passive: false });
-    spread.addEventListener("click", (event) => {
+    viewport.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "touch" || event.button !== 0 || zoom === 1 || event.target.closest("button")) return;
+      mousePan = { id: event.pointerId, x: event.clientX, y: event.clientY, panX, panY, moved: false };
+      viewport.setPointerCapture(event.pointerId);
+    });
+    viewport.addEventListener("pointermove", (event) => {
+      if (!mousePan || event.pointerId !== mousePan.id) return;
+      const dx = event.clientX - mousePan.x;
+      const dy = event.clientY - mousePan.y;
+      mousePan.moved ||= Math.hypot(dx, dy) > 5;
+      panX = mousePan.panX + dx;
+      panY = mousePan.panY + dy;
+      applyZoom();
+      spread.style.cursor = "grabbing";
+    });
+    const endMousePan = () => {
+      if (mousePan?.moved) lastTouchAction = Date.now();
+      mousePan = null;
+      spread.style.cursor = zoom > 1 ? "grab" : "";
+    };
+    viewport.addEventListener("pointerup", endMousePan);
+    viewport.addEventListener("pointercancel", endMousePan);
+    viewport.addEventListener("lostpointercapture", endMousePan);
+    viewport.addEventListener("click", (event) => {
       if (event.target.closest("button") || Date.now() - lastTouchAction < 800) return;
       setControlsVisible(!controlsVisible);
+    });
+    viewport.addEventListener("dblclick", (event) => {
+      if (event.target.closest("button")) return;
+      event.preventDefault();
+      resetZoom();
     });
     dialog.addEventListener("cancel", (event) => { event.preventDefault(); close(); });
     document.body.append(dialog);
@@ -695,6 +896,7 @@
     catch (_) { dialog.setAttribute("open", ""); dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); }
     htmlStyle.setProperty("overflow", "hidden");
     addEventListener("keydown", keydown, true);
+    addEventListener("resize", resizeViewer);
     document.addEventListener("fullscreenchange", updateFullscreenButton);
     document.addEventListener("load", sourceLoaded, true);
     updateFullscreenButton();
